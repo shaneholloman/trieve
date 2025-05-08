@@ -910,6 +910,7 @@ export type CreateDatasetReqPayload = {
  */
 export type CreateFormWithoutFile = {
     chunk_processing?: ((ChunkProcessing) | null);
+    error_handling?: ((ErrorHandlingStrategy) | null);
     /**
      * The number of seconds until task is deleted.
      * Expried tasks can **not** be updated, polled or accessed via web interface.
@@ -919,6 +920,7 @@ export type CreateFormWithoutFile = {
      * Whether to use high-resolution images for cropping and post-processing. (Latency penalty: ~7 seconds per page)
      */
     high_resolution?: (boolean) | null;
+    llm_processing?: ((LlmProcessing) | null);
     ocr_strategy?: ((OcrStrategy) | null);
     pipeline?: ((PipelineType) | null);
     segment_processing?: ((SegmentProcessing) | null);
@@ -1384,6 +1386,27 @@ export type Document = {
     screenshot?: (string) | null;
 };
 
+export type EditImageReqPayload = {
+    /**
+     * The images to edit
+     */
+    input_images: Array<ImageUpload>;
+    /**
+     * The mime type of the uploaded image(s)
+     */
+    mime_type?: (string) | null;
+    /**
+     * The number of images to generate (default: 1)
+     */
+    n?: (number) | null;
+    /**
+     * The prompt describing the desired edit
+     */
+    prompt: string;
+    quality?: ((InputImageQuality) | null);
+    size?: ((InputImageSize) | null);
+};
+
 export type EditMessageReqPayload = {
     /**
      * The base64 encoded audio input of the user message to attach to the topic and then generate an assistant message in response to.
@@ -1460,6 +1483,13 @@ export type EditMessageReqPayload = {
 };
 
 export type EmbedSource = 'HTML' | 'Markdown' | 'LLM' | 'Content';
+
+/**
+ * Controls how errors are handled during processing:
+ * - `Fail`: Stops processing and fails the task when any error occurs
+ * - `Continue`: Attempts to continue processing despite non-critical errors (eg. LLM refusals etc.)
+ */
+export type ErrorHandlingStrategy = 'Fail' | 'Continue';
 
 export type ErrorResponseBody = {
     message: string;
@@ -1828,6 +1858,21 @@ export type ExtendedOrganizationUsageCount = {
     tokens_ingested: number;
     user_count: number;
     website_pages_scraped: number;
+};
+
+/**
+ * Specifies the fallback strategy for LLM processing
+ *
+ * This can be:
+ * 1. None - No fallback will be used
+ * 2. Default - The system default fallback model will be used
+ * 3. Model - A specific model ID will be used as fallback (check the documentation for the models.)
+ */
+export type FallbackStrategy = 'None' | 'Default' | {
+    /**
+     * Use a specific model as fallback
+     */
+    Model: string;
 };
 
 /**
@@ -2330,6 +2375,35 @@ export type ImageConfig = {
     use_images?: (boolean) | null;
 };
 
+export type ImageEditResponse = {
+    /**
+     * The URL of the generated image
+     */
+    images: Array<ImageResponseData>;
+};
+
+export type ImageResponseData = {
+    /**
+     * The base64-encoded JSON of the generated image.
+     */
+    b64_json: string;
+};
+
+export type ImageUpload = {
+    /**
+     * The image base64 encoded
+     */
+    base64_image: string;
+    /**
+     * The file name of the image
+     */
+    file_name: string;
+};
+
+export type InputImageQuality = 'low' | 'medium' | 'high';
+
+export type InputImageSize = '1024x1024' | '1024x1536' | '1536x1024';
+
 export type IntegerTimePoint = {
     point: number;
     time_stamp: string;
@@ -2433,6 +2507,26 @@ export type LlmGenerationConfig = {
      */
     llm?: (string) | null;
     markdown?: (GenerationStrategy);
+};
+
+/**
+ * Controls the LLM used for the task.
+ */
+export type LlmProcessing = {
+    fallback_strategy?: FallbackStrategy;
+    /**
+     * The maximum number of tokens to generate.
+     */
+    max_completion_tokens?: (number) | null;
+    /**
+     * The ID of the model to use for the task. If not provided, the default model will be used.
+     * Please check the documentation for the model you want to use.
+     */
+    model_id?: (string) | null;
+    /**
+     * The temperature to use for the LLM.
+     */
+    temperature?: number;
 };
 
 export type LocationBoundingBox = {
@@ -5744,6 +5838,19 @@ export type RegenerateMessagePatchData = {
 
 export type RegenerateMessagePatchResponse = (string);
 
+export type EditImageData = {
+    /**
+     * JSON request payload to edit an image
+     */
+    requestBody: EditImageReqPayload;
+    /**
+     * The dataset id or tracking_id to use for the request. We assume you intend to use an id if the value is a valid uuid.
+     */
+    trDataset: string;
+};
+
+export type EditImageResponse = (string);
+
 export type GetToolFunctionParamsData = {
     /**
      * JSON request payload to get the parameters for a tool function
@@ -7423,6 +7530,21 @@ export type $OpenApiTs = {
                 200: string;
                 /**
                  * Service error relating to getting a chat completion
+                 */
+                400: ErrorResponseBody;
+            };
+        };
+    };
+    '/api/message/edit_image': {
+        post: {
+            req: EditImageData;
+            res: {
+                /**
+                 * A list of base64 encoded images
+                 */
+                200: string;
+                /**
+                 * Service error relating to editing the image
                  */
                 400: ErrorResponseBody;
             };

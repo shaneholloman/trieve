@@ -5578,6 +5578,70 @@
         ]
       }
     },
+    "/api/message/edit_image": {
+      "post": {
+        "tags": [
+          "Message"
+        ],
+        "summary": "Edit Image",
+        "description": "Uses `gpt-image-1` to edit an images based on a given prompt. Note that the images must be\nbase64 encoded and all must have the same mime type.",
+        "operationId": "edit_image",
+        "parameters": [
+          {
+            "name": "TR-Dataset",
+            "in": "header",
+            "description": "The dataset id or tracking_id to use for the request. We assume you intend to use an id if the value is a valid uuid.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "JSON request payload to edit an image",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditImageReqPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "A list of base64 encoded images",
+            "headers": {
+              "TR-QueryID": {
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "Query ID that is used for tracking analytics"
+              }
+            }
+          },
+          "400": {
+            "description": "Service error relating to editing the image",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
     "/api/message/get_tool_function_params": {
       "post": {
         "tags": [
@@ -10308,6 +10372,14 @@
             ],
             "nullable": true
           },
+          "error_handling": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ErrorHandlingStrategy"
+              }
+            ],
+            "nullable": true
+          },
           "expires_in": {
             "type": "integer",
             "format": "int32",
@@ -10318,6 +10390,14 @@
             "type": "boolean",
             "description": "Whether to use high-resolution images for cropping and post-processing. (Latency penalty: ~7 seconds per page)",
             "default": false,
+            "nullable": true
+          },
+          "llm_processing": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LlmProcessing"
+              }
+            ],
             "nullable": true
           },
           "ocr_strategy": {
@@ -11345,6 +11425,54 @@
           }
         }
       },
+      "EditImageReqPayload": {
+        "type": "object",
+        "required": [
+          "input_images",
+          "prompt"
+        ],
+        "properties": {
+          "input_images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImageUpload"
+            },
+            "description": "The images to edit"
+          },
+          "mime_type": {
+            "type": "string",
+            "description": "The mime type of the uploaded image(s)",
+            "nullable": true
+          },
+          "n": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The number of images to generate (default: 1)",
+            "nullable": true,
+            "minimum": 0
+          },
+          "prompt": {
+            "type": "string",
+            "description": "The prompt describing the desired edit"
+          },
+          "quality": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/InputImageQuality"
+              }
+            ],
+            "nullable": true
+          },
+          "size": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/InputImageSize"
+              }
+            ],
+            "nullable": true
+          }
+        }
+      },
       "EditMessageReqPayload": {
         "type": "object",
         "required": [
@@ -11506,6 +11634,14 @@
           "Markdown",
           "LLM",
           "Content"
+        ]
+      },
+      "ErrorHandlingStrategy": {
+        "type": "string",
+        "description": "Controls how errors are handled during processing:\n- `Fail`: Stops processing and fails the task when any error occurs\n- `Continue`: Attempts to continue processing despite non-critical errors (eg. LLM refusals etc.)",
+        "enum": [
+          "Fail",
+          "Continue"
         ]
       },
       "ErrorResponseBody": {
@@ -12382,6 +12518,37 @@
             "minimum": 0
           }
         }
+      },
+      "FallbackStrategy": {
+        "oneOf": [
+          {
+            "type": "string",
+            "description": "No fallback will be used",
+            "enum": [
+              "None"
+            ]
+          },
+          {
+            "type": "string",
+            "description": "Use the system default fallback model",
+            "enum": [
+              "Default"
+            ]
+          },
+          {
+            "type": "object",
+            "required": [
+              "Model"
+            ],
+            "properties": {
+              "Model": {
+                "type": "string",
+                "description": "Use a specific model as fallback"
+              }
+            }
+          }
+        ],
+        "description": "Specifies the fallback strategy for LLM processing\n\nThis can be:\n1. None - No fallback will be used\n2. Default - The system default fallback model will be used\n3. Model - A specific model ID will be used as fallback (check the documentation for the models.)"
       },
       "FieldCondition": {
         "type": "object",
@@ -13724,6 +13891,66 @@
           "use_images": true
         }
       },
+      "ImageEditResponse": {
+        "type": "object",
+        "required": [
+          "images"
+        ],
+        "properties": {
+          "images": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ImageResponseData"
+            },
+            "description": "The URL of the generated image"
+          }
+        }
+      },
+      "ImageResponseData": {
+        "type": "object",
+        "required": [
+          "b64_json"
+        ],
+        "properties": {
+          "b64_json": {
+            "type": "string",
+            "description": "The base64-encoded JSON of the generated image."
+          }
+        }
+      },
+      "ImageUpload": {
+        "type": "object",
+        "required": [
+          "base64_image",
+          "file_name"
+        ],
+        "properties": {
+          "base64_image": {
+            "type": "string",
+            "description": "The image base64 encoded"
+          },
+          "file_name": {
+            "type": "string",
+            "description": "The file name of the image"
+          }
+        }
+      },
+      "InputImageQuality": {
+        "type": "string",
+        "enum": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      "InputImageSize": {
+        "type": "string",
+        "enum": [
+          "1024x1024",
+          "1024x1536",
+          "1536x1024"
+        ]
+      },
       "IntegerTimePoint": {
         "type": "object",
         "required": [
@@ -13949,6 +14176,32 @@
               }
             ],
             "default": "LLM"
+          }
+        }
+      },
+      "LlmProcessing": {
+        "type": "object",
+        "description": "Controls the LLM used for the task.",
+        "properties": {
+          "fallback_strategy": {
+            "$ref": "#/components/schemas/FallbackStrategy"
+          },
+          "max_completion_tokens": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The maximum number of tokens to generate.",
+            "nullable": true,
+            "minimum": 0
+          },
+          "model_id": {
+            "type": "string",
+            "description": "The ID of the model to use for the task. If not provided, the default model will be used.\nPlease check the documentation for the model you want to use.",
+            "nullable": true
+          },
+          "temperature": {
+            "type": "number",
+            "format": "float",
+            "description": "The temperature to use for the LLM."
           }
         }
       },

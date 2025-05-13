@@ -947,7 +947,10 @@ pub struct GetToolFunctionParamsReqPayload {
     /// Text of the user's message to the assistant which will be used to generate the parameters for the tool function.
     pub user_message_text: Option<String>,
     /// Image URL to attach to the message to generate the parameters for the tool function.
+    #[deprecated(note = "Use image_urls instead")]
     pub image_url: Option<String>,
+    /// Image URLs to attach to the message to generate the parameters for the tool function.
+    pub image_urls: Option<Vec<String>>,
     /// The base64 encoded audio input of the user message to attach to the topic and then generate an assistant message in response to.
     pub audio_input: Option<String>,
     /// Function to get the parameters for.
@@ -1049,6 +1052,20 @@ pub async fn get_tool_function_params(
                 },
             }),
         );
+    }
+    if let Some(image_urls) = data.image_urls.clone() {
+        for image_url in image_urls.iter() {
+            message_content_parts.insert(
+                0,
+                ChatMessageContentPart::Image(ChatMessageImageContentPart {
+                    r#type: "image_url".to_string(),
+                    image_url: ImageUrlType {
+                        url: image_url.clone(),
+                        detail: None,
+                    },
+                }),
+            );
+        }
     }
 
     let client = Client {

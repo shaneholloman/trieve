@@ -18,17 +18,23 @@ export const SearchInput = () => {
     imageUrl,
     audioBase64,
     isRecording,
+    selectedSidebarFilters,
   } = useModalState();
 
   return (
     <div className={`input-wrapper ${props.type} tv-pt-2 trieve-mode-${mode}`}>
-      <div className="input-flex group-focus:tv-border has-[:focus]:tv-border has-[:focus]:tv-border-[var(--tv-prop-brand-color)] sm:tv-text-sm sm:tv-leading-6 tv-py-1.5 tv-px-4 tv-items-center tv-flex tv-justify-between tv-w-full tv-rounded-lg tv-border-[1px]">
+      <div className="input-flex group-focus:tv-border has-[:focus]:tv-border has-[:focus]:tv-border-[var(--tv-prop-brand-color)] sm:tv-text-sm sm:tv-leading-6 tv-py-1.5 tv-px-4 tv-items-center tv-flex tv-justify-between tv-w-full tv-rounded-lg tv-border-[1px] tv-mb-2">
         <input
           ref={inputRef}
           value={audioBase64 && query.length == 0 ? "Searching..." : query}
           onChange={(e) => {
             setLoadingResults(true);
             setQuery(e.target.value);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && props.searchBar) {
+              window.location.href = "/search?q=" + query;
+            }
           }}
           placeholder={
             imageUrl.length > 0
@@ -70,9 +76,9 @@ export const SearchInput = () => {
         </div>
       </div>
       <ImagePreview isUploading={uploadingImage} imageUrl={imageUrl} active />
-      {props.suggestedQueries && (!query || (query && !results.length)) && (
-        <SuggestedQueries />
-      )}
+      {props.suggestedQueries &&
+        (!query || (query && !results.length)) &&
+        selectedSidebarFilters.length === 0 && <SuggestedQueries />}
     </div>
   );
 };

@@ -162,10 +162,87 @@ pub struct SingleProductOptions {
 #[serde(rename_all = "camelCase")]
 pub struct PublicPageTag {
     tag: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     selected: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     icon_class_name: Option<String>,
     description: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RelevanceToolCallOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_message_text_prefix: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_images: Option<bool>,
+    pub tool_description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub high_description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub medium_description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub low_description: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct PriceToolCallOptions {
+    pub tool_description: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_price_description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_price_description: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct TagProp {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tag: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub range: Option<RangeSliderConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct RangeSliderConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FilterSidebarSection {
+    pub key: String,
+    pub filter_key: String,
+    pub title: String,
+    pub selection_type: String,
+    pub filter_type: String,
+    pub options: Vec<TagProp>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SidebarFilters {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sections: Option<Vec<FilterSidebarSection>>,
+}
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchPageProps {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub filter_sidebar_props: Option<SidebarFilters>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema, Default)]
@@ -183,6 +260,10 @@ pub struct PublicPageParameters {
     pub analytics: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<Vec<PublicPageTag>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relevance_tool_call_options: Option<RelevanceToolCallOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub price_tool_call_options: Option<PriceToolCallOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suggested_queries: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -281,6 +362,12 @@ pub struct PublicPageParameters {
     pub use_local: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub show_result_highlights: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search_page_props: Option<SearchPageProps>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search_bar: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_search_query: Option<String>,
 }
 
 #[utoipa::path(

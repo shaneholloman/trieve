@@ -142,6 +142,52 @@ export type AutocompleteReqPayload = {
     user_id?: (string) | null;
 };
 
+export type AutocompleteSearchOverGroupsReqPayload = {
+    /**
+     * If specified to true, this will extend the search results to include non-exact prefix matches of the same search_type such that a full page_size of results are returned. Default is false.
+     */
+    extend_results?: (boolean) | null;
+    filters?: ((ChunkFilter) | null);
+    /**
+     * Group_size is the number of chunks to fetch for each group. The default is 3. If a group has less than group_size chunks, all chunks will be returned. If this is set to a large number, we recommend setting slim_chunks to true to avoid returning the content and chunk_html of the chunks so as to lower the amount of time required for content download and serialization.
+     */
+    group_size?: (number) | null;
+    highlight_options?: ((HighlightOptions) | null);
+    /**
+     * Metadata is any metadata you want to associate w/ the event that is created from this request
+     */
+    metadata?: unknown;
+    /**
+     * Page size is the number of chunks to fetch. This can be used to fetch more than 10 chunks at a time.
+     */
+    page_size?: (number) | null;
+    query: SearchModalities;
+    /**
+     * If true, stop words (specified in server/src/stop-words.txt in the git repo) will be removed. Queries that are entirely stop words will be preserved.
+     */
+    remove_stop_words?: (boolean) | null;
+    /**
+     * Set score_threshold to a float to filter out chunks with a score below the threshold. This threshold applies before weight and bias modifications. If not specified, this defaults to 0.0.
+     */
+    score_threshold?: (number) | null;
+    scoring_options?: ((ScoringOptions) | null);
+    search_type: SearchMethod;
+    /**
+     * Set slim_chunks to true to avoid returning the content and chunk_html of the chunks. This is useful for when you want to reduce amount of data over the wire for latency improvement (typically 10-50ms). Default is false.
+     */
+    slim_chunks?: (boolean) | null;
+    sort_options?: ((SortOptions) | null);
+    typo_options?: ((TypoOptions) | null);
+    /**
+     * If true, quoted and - prefixed words will be parsed from the queries and used as required and negated words respectively. Default is false.
+     */
+    use_quote_negated_terms?: (boolean) | null;
+    /**
+     * User ID is the id of the user who is making the request. This is used to track user interactions with the search results.
+     */
+    user_id?: (string) | null;
+};
+
 export type BatchQueuedChunkResponse = {
     chunk_metadata: Array<ChunkMetadata>;
 };
@@ -575,6 +621,10 @@ export type ClickhouseTopicAnalyticsSummary = {
 
 export type CloneDatasetRequest = {
     /**
+     * Parameter to Clone Chunks from the original dataset to the new dataset. defaults to true.
+     */
+    clone_chunks?: (boolean) | null;
+    /**
      * Name of the dataset.
      */
     dataset_name: string;
@@ -582,7 +632,6 @@ export type CloneDatasetRequest = {
      * The id of the dataset you want to clone.
      */
     dataset_to_clone: string;
-    server_configuration?: ((DatasetConfigurationDTO) | null);
     /**
      * Optional tracking ID for the dataset. Can be used to track the dataset in external systems. Must be unique within the organization. Strongly recommended to not use a valid uuid value as that will not work with the TR-Dataset header.
      */
@@ -1968,6 +2017,15 @@ export type FileWithChunkGroups = {
     updated_at: string;
 };
 
+export type FilterSidebarSection = {
+    filterKey: string;
+    filterType: string;
+    key: string;
+    options: Array<TagProp>;
+    selectionType: string;
+    title: string;
+};
+
 export type FloatRange = {
     gt?: (number) | null;
     gte?: (number) | null;
@@ -2212,6 +2270,28 @@ export type GetFilesCursorResponseBody = {
 export type GetGroupsForChunksReqPayload = {
     chunk_ids?: Array<(string)> | null;
     chunk_tracking_ids?: Array<(string)> | null;
+};
+
+export type GetOrganizationApiKeysQuery = {
+    /**
+     * The cursor to start the pagination from.
+     */
+    cursor?: (string) | null;
+    /**
+     * The number of items to return per page.
+     */
+    limit?: (number) | null;
+};
+
+export type GetOrganizationApiKeysResponse = {
+    /**
+     * The api keys which belong to the organization.
+     */
+    api_keys: Array<ApiKeyRespBody>;
+    /**
+     * The cursor to start the pagination from.
+     */
+    cursor?: (string) | null;
 };
 
 export type GetOrganizationUsageReqPayload = {
@@ -2805,6 +2885,12 @@ export type PopularFiltersResponse = {
     popular_filters: Array<PopularFilters>;
 };
 
+export type PriceToolCallOptions = {
+    maxPriceDescription?: (string) | null;
+    minPriceDescription?: (string) | null;
+    toolDescription: string;
+};
+
 export type PublicDatasetOptions = {
     enabled: boolean;
     extra_params?: ((PublicPageParameters) | null);
@@ -2831,6 +2917,7 @@ export type PublicPageParameters = {
     defaultImageQuestion?: (string) | null;
     defaultSearchMode?: (string) | null;
     defaultSearchQueries?: Array<(string)> | null;
+    defaultSearchQuery?: (string) | null;
     floatingButtonPosition?: (string) | null;
     floatingButtonVersion?: (string) | null;
     floatingSearchIconPosition?: (string) | null;
@@ -2847,9 +2934,13 @@ export type PublicPageParameters = {
     openGraphMetadata?: ((OpenGraphMetadata) | null);
     openLinksInNewTab?: (boolean) | null;
     placeholder?: (string) | null;
+    priceToolCallOptions?: ((PriceToolCallOptions) | null);
     problemLink?: (string) | null;
+    relevanceToolCallOptions?: ((RelevanceToolCallOptions) | null);
     responsive?: (boolean) | null;
+    searchBar?: (boolean) | null;
     searchOptions?: ((PublicPageSearchOptions) | null);
+    searchPageProps?: ((SearchPageProps) | null);
     showFloatingButton?: (boolean) | null;
     showFloatingInput?: (boolean) | null;
     showFloatingSearchIcon?: (boolean) | null;
@@ -3110,6 +3201,11 @@ export type Range = {
 };
 
 export type RangeCondition = number;
+
+export type RangeSliderConfig = {
+    max?: (number) | null;
+    min?: (number) | null;
+};
 
 export type RateQueryRequest = {
     metadata?: unknown;
@@ -3404,6 +3500,15 @@ export type RegenerateMessageReqPayload = {
     user_id?: (string) | null;
 };
 
+export type RelevanceToolCallOptions = {
+    highDescription?: (string) | null;
+    includeImages?: (boolean) | null;
+    lowDescription?: (string) | null;
+    mediumDescription?: (string) | null;
+    toolDescription: string;
+    userMessageTextPrefix?: (string) | null;
+};
+
 export type RemoveChunkFromGroupReqPayload = {
     /**
      * Id of the chunk to remove from the group.
@@ -3681,6 +3786,7 @@ export type SearchOverGroupsReqPayload = {
      * Set score_threshold to a float to filter out chunks with a score below the threshold. This threshold applies before weight and bias modifications. If not specified, this defaults to 0.0.
      */
     score_threshold?: (number) | null;
+    scoring_options?: ((ScoringOptions) | null);
     search_type: SearchMethod;
     /**
      * Set slim_chunks to true to avoid returning the content and chunk_html of the chunks. This is useful for when you want to reduce amount of data over the wire for latency improvement (typicall 10-50ms). Default is false.
@@ -3711,6 +3817,11 @@ export type SearchOverGroupsResults = {
     chunks: Array<ScoreChunk>;
     file_id?: (string) | null;
     group: ChunkGroup;
+};
+
+export type SearchPageProps = {
+    display?: (boolean) | null;
+    filterSidebarProps?: ((SidebarFilters) | null);
 };
 
 export type SearchQueriesWithClicksCTRResponse = {
@@ -3823,6 +3934,7 @@ export type SearchWithinGroupReqPayload = {
      * Set score_threshold to a float to filter out chunks with a score below the threshold. This threshold applies before weight and bias modifications. If not specified, this defaults to 0.0.
      */
     score_threshold?: (number) | null;
+    scoring_options?: ((ScoringOptions) | null);
     search_type: SearchMethod;
     /**
      * Set slim_chunks to true to avoid returning the content and chunk_html of the chunks. This is useful for when you want to reduce amount of data over the wire for latency improvement (typicall 10-50ms). Default is false.
@@ -3921,6 +4033,10 @@ export type ShopifyPlanChangePayload = {
     idempotency_key: string;
     organization_id: string;
     shopify_plan: ShopifyPlan;
+};
+
+export type SidebarFilters = {
+    sections?: Array<FilterSidebarSection> | null;
 };
 
 export type SingleProductOptions = {
@@ -4142,6 +4258,13 @@ export type SuggestedQueriesReqPayload = {
 
 export type SuggestedQueriesResponse = {
     queries: Array<(string)>;
+};
+
+export type TagProp = {
+    description?: (string) | null;
+    label?: (string) | null;
+    range?: ((RangeSliderConfig) | null);
+    tag?: (string) | null;
 };
 
 export type TagsWithCount = {
@@ -5177,6 +5300,23 @@ export type CountGroupChunksData = {
 
 export type CountGroupChunksResponse = (GetChunkGroupCountResponse);
 
+export type AutocompleteSearchOverGroupsData = {
+    /**
+     * JSON request payload to semantically search for groups
+     */
+    requestBody: AutocompleteSearchOverGroupsReqPayload;
+    /**
+     * The dataset id or tracking_id to use for the request. We assume you intend to use an id if the value is a valid uuid.
+     */
+    trDataset: string;
+    /**
+     * The API version to use for this request. Defaults to V2 for orgs created after July 12, 2024 and V1 otherwise.
+     */
+    xApiVersion?: ((APIVersion) | null);
+};
+
+export type AutocompleteSearchOverGroupsResponse = (SearchOverGroupsResponseBody);
+
 export type SearchOverGroupsData = {
     /**
      * JSON request payload to semantically search over groups
@@ -5959,12 +6099,20 @@ export type UpdateOrganizationResponse = (Organization);
 
 export type GetOrganizationApiKeysData = {
     /**
+     * The cursor to start the pagination from.
+     */
+    cursor?: (string) | null;
+    /**
+     * The number of items to return per page.
+     */
+    limit?: (number) | null;
+    /**
      * The organization id to use for the request.
      */
     trOrganization: string;
 };
 
-export type GetOrganizationApiKeysResponse = (Array<ApiKeyRespBody>);
+export type GetOrganizationApiKeysResponse2 = (Array<ApiKeyRespBody>);
 
 export type CreateOrganizationApiKeyData = {
     /**
@@ -6828,6 +6976,21 @@ export type $OpenApiTs = {
                  * Group not found
                  */
                 404: ErrorResponseBody;
+            };
+        };
+    };
+    '/api/chunk_group/group_oriented_autocomplete': {
+        post: {
+            req: AutocompleteSearchOverGroupsData;
+            res: {
+                /**
+                 * Groups with embedding vectors which are similar to those in the request body
+                 */
+                200: SearchOverGroupsResponseBody;
+                /**
+                 * Service error relating to searching
+                 */
+                400: ErrorResponseBody;
             };
         };
     };

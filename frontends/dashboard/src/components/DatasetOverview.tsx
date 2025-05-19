@@ -1,7 +1,6 @@
 import { TbDatabasePlus } from "solid-icons/tb";
 import {
   Show,
-  Setter,
   Accessor,
   createSignal,
   createEffect,
@@ -26,7 +25,7 @@ import {
   createSolidTable,
   getCoreRowModel,
 } from "@tanstack/solid-table";
-import { DatasetAndUsage, DatasetUsageCount } from "trieve-ts-sdk";
+import { DatasetAndUsage, DatasetDTO, DatasetUsageCount } from "trieve-ts-sdk";
 import { TanStackTable } from "shared/ui";
 import { CopyButton } from "./CopyButton";
 import { formatDate } from "../utils/formatters";
@@ -34,6 +33,7 @@ import { TbReload } from "solid-icons/tb";
 import { createToast } from "../components/ShowToasts";
 
 import { AiOutlineDelete, AiOutlineClear } from "solid-icons/ai";
+import { CloneDatasetModal } from "./CloneDatasetModal";
 
 const colHelp = createColumnHelper<DatasetAndUsage>();
 const apiHost = import.meta.env.VITE_API_HOST as unknown as string;
@@ -46,6 +46,10 @@ export const DatasetOverview = () => {
     createSignal<boolean>(false);
   const [page, setPage] = createSignal(0);
   const [datasetSearchQuery, setDatasetSearchQuery] = createSignal("");
+  const [openCloneDatasetModal, setOpenCloneDatasetModal] = createSignal(false);
+  const [datasetToClone, setDatasetToClone] = createSignal<DatasetDTO | null>(
+    null,
+  );
   const [usage, setUsage] = createSignal<
     Record<string, { chunk_count: number }>
   >({});
@@ -95,13 +99,15 @@ export const DatasetOverview = () => {
       createToast({
         title: "Updated",
         type: "success",
-        message: `Successfully updated chunk count: ${countDifference} chunk${Math.abs(countDifference) === 1 ? " has" : "s have"
-          } been ${countDifference > 0
+        message: `Successfully updated chunk count: ${countDifference} chunk${
+          Math.abs(countDifference) === 1 ? " has" : "s have"
+        } been ${
+          countDifference > 0
             ? "added"
             : countDifference < 0
               ? "removed"
               : "added or removed"
-          } since last update.`,
+        } since last update.`,
         timeout: 3000,
       });
     } catch (_) {
@@ -182,44 +188,6 @@ export const DatasetOverview = () => {
       });
   };
 
-  const cloneDataset = async (datasetId: string) => {
-    const confirmBox = confirm(
-      "This will clone the dataset and all of its chunks, groups, and files. \n\nProceed?",
-    );
-    if (!confirmBox) return;
-
-    await fetch(`${apiHost}/dataset/clone`, {
-      method: "POST",
-      body: JSON.stringify({
-        dataset_to_clone: datasetId,
-        dataset_name:
-          datasets().find((dataset) => dataset.dataset.id === datasetId)
-            ?.dataset.name + " (Clone)",
-      }),
-      headers: {
-        "Content-Type": "application/json",
-        "TR-Dataset": datasetId,
-      },
-      credentials: "include",
-    })
-      .then(() => {
-        createToast({
-          title: "Success",
-          message: "Dataset cloned successfully!",
-          type: "success",
-        });
-
-        void refetchDatasets();
-      })
-      .catch(() => {
-        createToast({
-          title: "Error",
-          message: "Error cloning dataset!",
-          type: "error",
-        });
-      });
-  };
-
   const currentUserRole = createMemo(() => {
     return (
       userContext.user().user_orgs.find((val) => {
@@ -284,21 +252,25 @@ export const DatasetOverview = () => {
       colHelp.display({
         header: "Dataset Actions",
         cell(info) {
-          const datasetId = info.row.original.dataset.id;
+          const dataset = info.row.original.dataset;
+          const datasetId = dataset.id;
 
           return (
             <Show when={currentUserRole() === 2}>
               <div class="justify-left flex content-center gap-2">
                 <button
+                  title="Clone Dataset"
                   class="flex items-center gap-1 text-lg opacity-70 hover:text-fuchsia-500"
                   onClick={(e) => {
                     e.stopPropagation();
-                    void cloneDataset(datasetId);
+                    setDatasetToClone(dataset);
+                    setOpenCloneDatasetModal(true);
                   }}
                 >
                   <AiOutlineCopy />
                 </button>
                 <button
+                  title="Clear Dataset Chunks"
                   class="flex items-center gap-1 text-lg opacity-70 hover:text-fuchsia-500"
                   onClick={(e) => {
                     e.stopPropagation();
@@ -308,6 +280,7 @@ export const DatasetOverview = () => {
                   <AiOutlineClear />
                 </button>
                 <button
+                  title="Delete Dataset"
                   class="flex items-center gap-1 text-lg text-red-500 opacity-70 hover:text-red-800"
                   onClick={(e) => {
                     e.stopPropagation();
@@ -400,6 +373,14 @@ export const DatasetOverview = () => {
 
   return (
     <>
+      <CloneDatasetModal
+        isOpen={openCloneDatasetModal}
+        datasetToClone={datasetToClone}
+        closeModal={() => {
+          setOpenCloneDatasetModal(false);
+          void refetchDatasets();
+        }}
+      />
       <NewDatasetModal
         isOpen={newDatasetModalOpen}
         closeModal={() => {
@@ -501,10 +482,10 @@ export const DatasetOverview = () => {
   );
 };
 
-const PaginationArrows = (props: {
+export const PaginationArrows = (props: {
   page: Accessor<number>;
-  setPage: Setter<number>;
-  maxPageDiscovered: Accessor<number | null>;
+  setPage: (page: number | ((page: number) => number)) => void;
+  maxPageDiscovered?: Accessor<number | null>;
 }) => {
   return (
     <div class="flex items-center justify-end gap-2 border-t border-t-neutral-200 p-1">
@@ -518,7 +499,9 @@ const PaginationArrows = (props: {
       <div class="text-sm">Page {props.page() + 1}</div>
       <button
         onClick={() => props.setPage((page) => page + 1)}
-        disabled={props.page() === props.maxPageDiscovered()}
+        disabled={
+          props.maxPageDiscovered && props.page() === props.maxPageDiscovered()
+        }
         class="p-2 text-lg font-semibold text-neutral-600 disabled:opacity-50"
       >
         <AiFillCaretRight />

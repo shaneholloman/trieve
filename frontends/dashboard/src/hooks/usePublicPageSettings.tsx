@@ -18,6 +18,11 @@ import { createToast } from "../components/ShowToasts";
 import { ApiRoutes } from "../components/Routes";
 import { HeroPatterns } from "../pages/dataset/HeroPatterns";
 import { createInitializedContext } from "../utils/initialize";
+import {
+  defaultOpenGraphMetadata,
+  defaultPriceToolCallOptions,
+  defaultRelevanceToolCallOptions,
+} from "../pages/dataset/PublicPageSettings";
 
 export type DatasetWithPublicPage = Dataset & {
   server_configuration: {
@@ -34,7 +39,9 @@ export const { use: usePublicPage, provider: PublicPageProvider } =
     const [searchOptionsError, setSearchOptionsError] = createSignal<
       string | null
     >(null);
-
+    const [tagOptionsError, setTagOptionsError] = createSignal<string | null>(
+      null,
+    );
     const [isPublic, setisPublic] = createSignal<boolean>(false);
     const [hasLoaded, setHasLoaded] = createSignal(false);
 
@@ -74,6 +81,24 @@ export const { use: usePublicPage, provider: PublicPageProvider } =
     }));
 
     createEffect(() => {
+      if (!extraParams.relevanceToolCallOptions) {
+        setExtraParams("relevanceToolCallOptions", {
+          ...defaultRelevanceToolCallOptions,
+        });
+      }
+
+      if (!extraParams.priceToolCallOptions) {
+        setExtraParams("priceToolCallOptions", {
+          ...defaultPriceToolCallOptions,
+        });
+      }
+
+      if (!extraParams.openGraphMetadata) {
+        setExtraParams("openGraphMetadata", {
+          ...defaultOpenGraphMetadata,
+        });
+      }
+
       // manually set the array for rolemessages to simplify logic
       // context blocks until it's set
       if (
@@ -95,10 +120,6 @@ export const { use: usePublicPage, provider: PublicPageProvider } =
         ) {
           setExtraParams("useGroupSearch", true);
         }
-      }
-
-      if (extraParams.inline == undefined || extraParams.inline == null) {
-        setExtraParams("inline", true);
       }
 
       if (
@@ -192,6 +213,7 @@ export const { use: usePublicPage, provider: PublicPageProvider } =
                   placeholder: "Search...",
                   defaultSearchMode: "chat",
                   type: "ecommerce",
+                  inline: false,
                   openLinksInNewTab: true,
                 },
               },
@@ -245,6 +267,8 @@ export const { use: usePublicPage, provider: PublicPageProvider } =
       setExtraParams,
       searchOptionsError,
       setSearchOptionsError,
+      tagOptionsError,
+      setTagOptionsError,
       isPublic,
       publicUrl,
       unpublishDataset,

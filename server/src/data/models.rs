@@ -3355,7 +3355,6 @@ impl DatasetConfigurationDTO {
         if public_dataset_api_key.is_none() {
             public_dataset_api_key = curr_dataset_config.PUBLIC_DATASET.api_key;
         }
-        println!("public_dataset {:?}", public_dataset_api_key);
 
         DatasetConfiguration {
             LLM_BASE_URL: self
@@ -3470,6 +3469,12 @@ impl DatasetConfigurationDTO {
                         .analytics
                         .or(page_parameters_curr.analytics),
                     tags: page_parameters_self.tags.or(page_parameters_curr.tags),
+                    relevance_tool_call_options: page_parameters_self
+                        .relevance_tool_call_options
+                        .or(page_parameters_curr.relevance_tool_call_options),
+                    price_tool_call_options: page_parameters_self
+                        .price_tool_call_options
+                        .or(page_parameters_curr.price_tool_call_options),
                     suggested_queries: page_parameters_self
                         .suggested_queries
                         .or(page_parameters_curr.suggested_queries),
@@ -3614,6 +3619,15 @@ impl DatasetConfigurationDTO {
                     show_result_highlights: page_parameters_self
                         .show_result_highlights
                         .or(page_parameters_curr.show_result_highlights),
+                    search_page_props: page_parameters_self
+                        .search_page_props
+                        .or(page_parameters_curr.search_page_props),
+                    default_search_query: page_parameters_self
+                        .default_search_query
+                        .or(page_parameters_curr.default_search_query),
+                    search_bar: page_parameters_self
+                        .search_bar
+                        .or(page_parameters_curr.search_bar),
                 }),
             },
             DISABLE_ANALYTICS: self
@@ -4615,6 +4629,7 @@ impl ApiKeyRequestParams {
             typo_options: self.typo_options.or(payload.typo_options),
             sort_options: payload.sort_options,
             metadata: payload.metadata,
+            scoring_options: payload.scoring_options,
         }
     }
 
@@ -4643,6 +4658,7 @@ impl ApiKeyRequestParams {
             user_id: payload.user_id,
             typo_options: self.typo_options.or(payload.typo_options),
             metadata: payload.metadata,
+            scoring_options: payload.scoring_options,
         }
     }
 }
@@ -9184,6 +9200,7 @@ impl<'de> Deserialize<'de> for SearchWithinGroupReqPayload {
             user_id: Option<String>,
             typo_options: Option<TypoOptions>,
             metadata: Option<serde_json::Value>,
+            scoring_options: Option<ScoringOptions>,
             #[serde(flatten)]
             other: std::collections::HashMap<String, serde_json::Value>,
         }
@@ -9218,6 +9235,7 @@ impl<'de> Deserialize<'de> for SearchWithinGroupReqPayload {
             remove_stop_words: helper.remove_stop_words,
             user_id: helper.user_id,
             typo_options: helper.typo_options,
+            scoring_options: helper.scoring_options,
         })
     }
 }
@@ -9244,6 +9262,7 @@ impl<'de> Deserialize<'de> for SearchOverGroupsReqPayload {
             user_id: Option<String>,
             typo_options: Option<TypoOptions>,
             sort_options: Option<SortOptions>,
+            scoring_options: Option<ScoringOptions>,
             metadata: Option<serde_json::Value>,
             #[serde(flatten)]
             other: std::collections::HashMap<String, serde_json::Value>,
@@ -9276,6 +9295,7 @@ impl<'de> Deserialize<'de> for SearchOverGroupsReqPayload {
             sort_options,
             remove_stop_words: helper.remove_stop_words,
             user_id: helper.user_id,
+            scoring_options: helper.scoring_options,
         })
     }
 }

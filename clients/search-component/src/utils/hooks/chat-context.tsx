@@ -1,13 +1,17 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import React, { createContext, useContext, useRef, useState } from "react";
-import { useModalState } from "./modal-context";
+import {
+  defaultPriceToolCallOptions,
+  defaultRelevanceToolCallOptions,
+  useModalState,
+} from "./modal-context";
 import { Chunk } from "../types";
-import { getFingerprint } from "@thumbmarkjs/thumbmarkjs";
 import { useEffect } from "react";
 import { trackViews } from "../trieve";
 import {
   ChunkFilter,
   ChunkGroup,
+  ChunkMetadata,
   EventsForTopicResponse,
   RAGAnalyticsResponse,
   ToolFunctionParameter,
@@ -16,14 +20,25 @@ import { defaultHighlightOptions } from "../highlight";
 
 export const retryOperation = async <T,>(
   operation: () => Promise<T>,
-  maxRetries: number = 10,
+  maxRetries: number = 3,
   delayMs: number = 100,
 ): Promise<T> => {
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       return await operation();
     } catch (error) {
-      if (attempt === maxRetries) throw error;
+      if (
+        attempt === maxRetries ||
+        (error instanceof DOMException && error.name === "AbortError") ||
+        (typeof error === "string" && error.includes("AbortError"))
+      ) {
+        console.error(
+          `Trieve operation failed after ${attempt} attempts:`,
+          error,
+        );
+        throw error;
+      }
+
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
@@ -60,6 +75,7 @@ const ChatContext = createContext<{
     match_any_tags?: string[],
   ) => Promise<void>;
   isLoading: boolean;
+  loadingText: string;
   messages: ComponentMessages;
   currentQuestion: string;
   setCurrentQuestion: React.Dispatch<React.SetStateAction<string>>;
@@ -75,6 +91,7 @@ const ChatContext = createContext<{
   askQuestion: async () => {},
   currentQuestion: "",
   isLoading: false,
+  loadingText: "",
   messages: [],
   setCurrentQuestion: () => {},
   cancelGroupChat: () => {},
@@ -101,13 +118,17 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
     selectedTags,
     currentGroup,
     props,
-    selectedSidebarFilters,
   } = useModalState();
   const [currentQuestion, setCurrentQuestion] = useState(query);
   const [currentTopic, setCurrentTopic] = useState("");
   const called = useRef(false);
   const [messages, setMessages] = useState<ComponentMessages>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [loadingText, setLoadingText] = useState("");
+  const searchAbortController = useRef<AbortController>(new AbortController());
+  const relevanceToolCallAbortController = useRef<AbortController>(
+    new AbortController(),
+  );
   const chatMessageAbortController = useRef<AbortController>(
     new AbortController(),
   );
@@ -128,6 +149,7 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
     if (!currentTopic) {
       called.current = true;
       setIsLoading(true);
+      setLoadingText("Getting the AI's attention...");
       setCurrentQuestion("");
       try {
         const topic = await retryOperation(async () => {
@@ -153,6 +175,9 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
   };
 
   const clearConversation = () => {
+    searchAbortController.current.abort("Aborted");
+    relevanceToolCallAbortController.current.abort("Aborted");
+    chatMessageAbortController.current.abort("Aborted");
     setCurrentTopic("");
     setMessages([]);
   };
@@ -463,131 +488,189 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
 
     let stoppedGeneratingMessage = false;
 
-    if (
-      (!defaultMatchAnyTags || !defaultMatchAnyTags?.length) &&
-      !curGroup &&
-      (props.tags?.length ?? 0) > 0
-    ) {
-      let filterParamsRetries = 0;
-      while (filterParamsRetries < 3) {
-        filterParamsRetries++;
-        chatMessageAbortController.current = new AbortController();
-        const toolCallTimeout = setTimeout(
-          () => {
-            console.error(
-              "getToolCallFunctionParams timeout on retry: ",
-              filterParamsRetries,
-            );
-            chatMessageAbortController.current.abort();
-          },
-          imageUrl || curAudioBase64 ? 20000 : 10000,
+    chatMessageAbortController.current = new AbortController();
+    const toolCallTimeout = setTimeout(
+      () => {
+        console.error("getToolCallFunctionParams timeout on retry: ");
+        chatMessageAbortController.current.abort(
+          "AbortError timeout for price filters tool call",
         );
+      },
+      imageUrl || curAudioBase64 ? 20000 : 10000,
+    );
 
-        try {
-          let filterParamsResp = null;
-          try {
-            filterParamsResp = await retryOperation(async () => {
-              return await trieveSDK.getToolCallFunctionParams(
+    setLoadingText("Thinking about filter criteria...");
+    try {
+      const priceFiltersPromise = retryOperation(async () => {
+        if (props.type === "ecommerce" && !curGroup) {
+          return await trieveSDK.getToolCallFunctionParams({
+            user_message_text: questionProp || currentQuestion,
+            image_url: imageUrl ? imageUrl : null,
+            audio_input: curAudioBase64 ? curAudioBase64 : null,
+            tool_function: {
+              name: "get_price_filters",
+              description:
+                props.priceToolCallOptions?.toolDescription ??
+                defaultPriceToolCallOptions.toolDescription,
+              parameters: [
                 {
-                  user_message_text:
-                    questionProp || currentQuestion
-                      ? `Get filters from the following messages: ${messages
-                          .slice(0, -1)
-                          .filter((message) => {
-                            return message.type == "user";
-                          })
-                          .map(
-                            (message) => `\n\n${message.text}`,
-                          )} \n\n ${questionProp || currentQuestion}`
-                      : null,
-                  image_url: imageUrl ? imageUrl : null,
-                  audio_input: curAudioBase64 ? curAudioBase64 : null,
-                  tool_function: {
-                    name: "get_filters",
-                    description:
-                      "Decide on which filters to apply to available catalog being used within the knowledge base to respond. If the question is slightly like a product name, respond with no filters (all false).",
-                    parameters:
-                      props.tags?.map((tag) => {
-                        return {
-                          name: tag.label,
-                          parameter_type: "boolean",
-                          description: tag.description ?? "",
-                        } as ToolFunctionParameter;
-                      }) ?? [],
-                  },
-                },
-                chatMessageAbortController.current.signal,
-                (headers: Record<string, string>) => {
-                  if (headers["x-tr-query"] && curAudioBase64) {
-                    transcribedQuery = headers["x-tr-query"];
-                  }
-                },
-              );
-            });
-          } catch (e) {
-            console.error("error getting getToolCallFunctionParams", e);
-          }
-
-          if (transcribedQuery && curAudioBase64) {
-            questionProp = transcribedQuery;
-            setAudioBase64("");
-            curAudioBase64 = undefined;
-            setMessages((m) => {
-              return [
-                ...m.slice(0, -2),
-                {
-                  type: "user",
-                  text: transcribedQuery ?? "",
-                  additional: null,
-                  queryId: null,
-                  imageUrl: imageUrl ? imageUrl : null,
+                  name: "min_price",
+                  parameter_type: "number",
+                  description: (props.priceToolCallOptions
+                    ?.minPriceDescription ??
+                    defaultPriceToolCallOptions.minPriceDescription) as string,
                 },
                 {
-                  type: "system",
-                  text: "Loading...",
-                  additional: null,
-                  queryId: null,
+                  name: "max_price",
+                  parameter_type: "number",
+                  description: (props.priceToolCallOptions
+                    ?.maxPriceDescription ??
+                    defaultPriceToolCallOptions.maxPriceDescription) as string,
                 },
-              ];
-            });
-          }
+              ],
+            },
+          });
+        } else {
+          return {
+            parameters: null,
+          };
+        }
+      });
 
-          const match_any_tags = [];
-          if (filterParamsResp?.parameters) {
-            for (const key of Object.keys(filterParamsResp.parameters ?? {})) {
-              const filterParam = (filterParamsResp.parameters as any)[
-                key as keyof typeof filterParamsResp.parameters
-              ];
-              if (typeof filterParam === "boolean" && filterParam) {
-                const tag = props.tags?.find((t) => t.label === key)?.tag;
-                if (tag) {
-                  match_any_tags.push(tag);
-                }
+      const tagFiltersPromise = retryOperation(async () => {
+        if (
+          (!defaultMatchAnyTags || !defaultMatchAnyTags?.length) &&
+          !curGroup &&
+          (props.tags?.length ?? 0) > 0
+        ) {
+          return await trieveSDK.getToolCallFunctionParams(
+            {
+              user_message_text:
+                questionProp || currentQuestion
+                  ? `Get filters from the following messages: ${messages
+                      .slice(0, -1)
+                      .filter((message) => {
+                        return message.type == "user";
+                      })
+                      .map(
+                        (message) => `\n\n${message.text}`,
+                      )} \n\n ${questionProp || currentQuestion}`
+                  : null,
+              image_url: imageUrl ? imageUrl : null,
+              audio_input: curAudioBase64 ? curAudioBase64 : null,
+              tool_function: {
+                name: "get_filters",
+                description:
+                  "Decide on which filters to apply to the available catalog being used within the knowledge base to respond. If the question is slightly like a product name, respond with no filters (all false).",
+                parameters:
+                  props.tags?.map((tag) => {
+                    return {
+                      name: tag.label,
+                      parameter_type: "boolean",
+                      description: tag.description ?? "",
+                    } as ToolFunctionParameter;
+                  }) ?? [],
+              },
+            },
+            chatMessageAbortController.current.signal,
+            (headers: Record<string, string>) => {
+              if (headers["x-tr-query"] && curAudioBase64) {
+                transcribedQuery = headers["x-tr-query"];
               }
+            },
+          );
+        } else {
+          return {
+            parameters: null,
+          };
+        }
+      });
+
+      const [priceFiltersResp, tagFiltersResp] = await Promise.all([
+        priceFiltersPromise,
+        tagFiltersPromise,
+      ]);
+
+      if (transcribedQuery && curAudioBase64) {
+        questionProp = transcribedQuery;
+        setAudioBase64("");
+        curAudioBase64 = undefined;
+        setMessages((m) => {
+          return [
+            ...m.slice(0, -2),
+            {
+              type: "user",
+              text: transcribedQuery ?? "",
+              additional: null,
+              queryId: null,
+              imageUrl: imageUrl ? imageUrl : null,
+            },
+            {
+              type: "system",
+              text: "Loading...",
+              additional: null,
+              queryId: null,
+            },
+          ];
+        });
+      }
+
+      const match_any_tags = [];
+      if (tagFiltersResp?.parameters) {
+        for (const key of Object.keys(tagFiltersResp.parameters ?? {})) {
+          const filterParam = (tagFiltersResp.parameters as any)[
+            key as keyof typeof tagFiltersResp.parameters
+          ];
+          if (typeof filterParam === "boolean" && filterParam) {
+            const tag = props.tags?.find((t) => t.label === key)?.tag;
+            if (tag) {
+              match_any_tags.push(tag);
             }
-          }
-
-          if (match_any_tags.length > 0) {
-            if (!filters.should) {
-              filters.should = [];
-            }
-            filters.should.push({
-              field: "tag_set",
-              match_any: match_any_tags,
-            });
-          }
-
-          clearTimeout(toolCallTimeout);
-
-          break;
-        } catch (e) {
-          console.error("error getting getToolCallFunctionParams", e);
-          clearTimeout(toolCallTimeout);
-          if (e && typeof e == "string" && e === "Stopped generating message") {
-            stoppedGeneratingMessage = true;
-            break;
           }
         }
+      }
+
+      if (match_any_tags.length > 0) {
+        if (!filters.should) {
+          filters.should = [];
+        }
+        filters.should.push({
+          field: "tag_set",
+          match_any: match_any_tags,
+        });
+      }
+
+      if (priceFiltersResp?.parameters) {
+        const params = priceFiltersResp.parameters as Record<
+          string,
+          number | undefined
+        >;
+        const minPrice = params["min_price"];
+        const maxPrice = params["max_price"];
+        const range: Record<string, number> = {};
+        if (minPrice) {
+          range["gte"] = minPrice;
+        }
+        if (maxPrice) {
+          range["lte"] = maxPrice;
+        }
+        if (Object.keys(range).length > 0) {
+          if (!filters.should) {
+            filters.should = [];
+          }
+          filters.should.push({
+            field: "num_value",
+            range: range,
+          });
+        }
+      }
+
+      clearTimeout(toolCallTimeout);
+    } catch (e) {
+      console.error("error getting getToolCallFunctionParams", e);
+      clearTimeout(toolCallTimeout);
+      if (e && typeof e == "string" && e === "Stopped generating message") {
+        stoppedGeneratingMessage = true;
       }
     }
 
@@ -617,6 +700,220 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
       filters = null;
     }
 
+    let createMessageFilter: ChunkFilter | null = null;
+    searchAbortController.current = new AbortController();
+    if (curGroup) {
+      setLoadingText("Reading the product's information...");
+      const filtersWithoutGroupIds = {
+        must: filters?.must?.filter((f) => {
+          return "field" in f && f.field !== "group_ids";
+        }),
+        must_not: filters?.must_not?.filter((f) => {
+          return "field" in f && f.field !== "group_ids";
+        }),
+        should: filters?.should?.filter((f) => {
+          return "field" in f && f.field !== "group_ids";
+        }),
+      };
+
+      const chunkIds = await retryOperation(async () => {
+        const fulltextSearchPromise = trieveSDK.searchInGroup(
+          {
+            query: questionProp || currentQuestion,
+            search_type: "fulltext",
+            filters: filtersWithoutGroupIds,
+            page_size: 10,
+            group_id: curGroup.id,
+            user_id: fingerprint,
+          },
+          searchAbortController.current.signal,
+        );
+
+        const chunksInGroupPromise = trieveSDK.getChunksInGroup(
+          {
+            groupId: curGroup.id,
+            page: 1,
+          },
+          searchAbortController.current.signal,
+        );
+
+        const [fulltextSearchResp, chunksInGroupResp] = await Promise.all([
+          fulltextSearchPromise,
+          chunksInGroupPromise,
+        ]);
+        const chunkIds = fulltextSearchResp.chunks.map(
+          (score_chunk) => score_chunk.chunk.id,
+        );
+        if (!chunkIds.length) {
+          chunkIds.push(...chunksInGroupResp.chunks.map((chunk) => chunk.id));
+        }
+        return chunkIds;
+      });
+      createMessageFilter = {
+        must: [
+          {
+            field: "ids",
+            match_any: chunkIds,
+          },
+        ],
+      };
+    } else {
+      try {
+        setLoadingText("Searching for relevant products...");
+        const searchOverGroupsResp = await retryOperation(async () => {
+          return await trieveSDK.searchOverGroups(
+            {
+              query: questionProp || currentQuestion,
+              search_type: "fulltext",
+              filters: filters,
+              page_size: 20,
+              group_size: 1,
+              user_id: fingerprint,
+            },
+            searchAbortController.current.signal,
+          );
+        });
+
+        setLoadingText("Determing relevance of the results...");
+        relevanceToolCallAbortController.current = new AbortController();
+        // add a 5s timeout to the relevance tool call
+        const relevanceToolCallTimeout = setTimeout(() => {
+          console.error("relevanceToolCall timeout on retry: ");
+          relevanceToolCallAbortController.current.abort(
+            "AbortError timeout on relevanceToolCall",
+          );
+        }, 5000);
+        const highlyRelevantGroupIds: string[] = [];
+        const mediumRelevantGroupIds: string[] = [];
+        const lowlyRelevantGroupIds: string[] = [];
+        const rankingPromises = searchOverGroupsResp.results.map(
+          async (group) => {
+            const firstChunk = group.chunks.length
+              ? (group.chunks[0].chunk as ChunkMetadata)
+              : null;
+            const imageUrls = props.relevanceToolCallOptions?.includeImages
+              ? (
+                  (firstChunk?.image_urls?.filter(
+                    (stringOrNull): stringOrNull is string =>
+                      Boolean(stringOrNull),
+                  ) ||
+                    []) ??
+                  []
+                ).splice(0, 1)
+              : undefined;
+            const jsonOfFirstChunk = {
+              title: (firstChunk?.metadata as any)["title"],
+              Description: firstChunk?.chunk_html,
+              price: firstChunk?.num_value,
+            };
+            return retryOperation(async () => {
+              const relevanceToolCallResp =
+                await trieveSDK.getToolCallFunctionParams(
+                  {
+                    user_message_text: `Rank the relevance of this product given the following query: ${questionProp || currentQuestion}. Here are the details of the product you need to rank the relevance of:\n\n${JSON.stringify(jsonOfFirstChunk)}. ${props.relevanceToolCallOptions?.userMessageTextPrefix ?? defaultRelevanceToolCallOptions.userMessageTextPrefix}`,
+                    image_urls: imageUrls,
+                    tool_function: {
+                      name: "determine_relevance",
+                      description:
+                        props.relevanceToolCallOptions?.toolDescription ??
+                        defaultRelevanceToolCallOptions.toolDescription,
+                      parameters: [
+                        {
+                          name: "high",
+                          description: (props.relevanceToolCallOptions
+                            ?.highDescription ??
+                            defaultRelevanceToolCallOptions.highDescription) as string,
+                          parameter_type: "boolean",
+                        },
+                        {
+                          name: "medium",
+                          description: (props.relevanceToolCallOptions
+                            ?.mediumDescription ??
+                            defaultRelevanceToolCallOptions.mediumDescription) as string,
+                          parameter_type: "boolean",
+                        },
+                        {
+                          name: "low",
+                          description: (props.relevanceToolCallOptions
+                            ?.lowDescription ??
+                            defaultRelevanceToolCallOptions.lowDescription) as string,
+                          parameter_type: "boolean",
+                        },
+                      ],
+                    },
+                  },
+                  relevanceToolCallAbortController.current?.signal,
+                );
+
+              setLoadingText((prev) => {
+                const contentType =
+                  props.type === "ecommerce" ? "product" : "section";
+                const match = prev.match(
+                  new RegExp(
+                    `Verifying relevance for ${contentType} (\\d+) of \\d+`,
+                  ),
+                );
+                if (prev === "Determing relevance of the results...") {
+                  return `Searching for relevant ${contentType}s...`;
+                } else if (
+                  prev === `Searching for relevant ${contentType}s...`
+                ) {
+                  return `Verifying relevance for ${contentType} 1 of ${searchOverGroupsResp.results.length + 1}...`;
+                } else if (match) {
+                  const currentNumber = parseInt(match[1], 10);
+                  return `Verifying relevance for ${contentType} ${currentNumber + 1} of ${searchOverGroupsResp.results.length + 1}...`;
+                }
+                return prev;
+              });
+
+              if ((relevanceToolCallResp.parameters as any)["high"] == true) {
+                highlyRelevantGroupIds.push(group.group.id);
+              } else if (
+                (relevanceToolCallResp.parameters as any)["medium"] == true
+              ) {
+                mediumRelevantGroupIds.push(group.group.id);
+              } else if (
+                (relevanceToolCallResp.parameters as any)["low"] == true
+              ) {
+                lowlyRelevantGroupIds.push(group.group.id);
+              }
+            });
+          },
+        );
+        await Promise.all(rankingPromises);
+        setLoadingText("Finished verifying relevance");
+        clearTimeout(relevanceToolCallTimeout);
+        let groupIdsToUse = highlyRelevantGroupIds;
+
+        if (highlyRelevantGroupIds.length > 1) {
+          groupIdsToUse = [...highlyRelevantGroupIds];
+        } else if (highlyRelevantGroupIds.length === 1) {
+          groupIdsToUse = [
+            ...highlyRelevantGroupIds,
+            ...mediumRelevantGroupIds,
+          ];
+        } else if (
+          highlyRelevantGroupIds.length === 0 &&
+          mediumRelevantGroupIds.length > 0
+        ) {
+          groupIdsToUse = mediumRelevantGroupIds;
+        }
+
+        const topGroupIds = groupIdsToUse.slice(0, 8);
+        createMessageFilter = {
+          must: [
+            {
+              field: "group_ids",
+              match_any: topGroupIds,
+            },
+          ],
+        };
+      } catch (e) {
+        console.error("error getting determine_relevance", e);
+      }
+    }
+
+    setLoadingText("AI is generating a response...");
     let messageReaderRetries = 0;
     let {
       reader,
@@ -625,7 +922,6 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
       reader: ReadableStreamDefaultReader<Uint8Array> | null;
       queryId: string | null;
     } = { reader: null, queryId: null };
-
     while (!stoppedGeneratingMessage && messageReaderRetries < 5) {
       messageReaderRetries++;
       chatMessageAbortController.current = new AbortController();
@@ -635,51 +931,61 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
             "createMessageReaderWithQueryId timeout on retry: ",
             messageReaderRetries,
           );
-          chatMessageAbortController.current.abort();
+          chatMessageAbortController.current.abort(
+            "AbortError on createMessage call",
+          );
+          setLoadingText(
+            messageReaderRetries < 5
+              ? `OpenAI failed to respond. Retry attempt ${messageReaderRetries}...`
+              : "OpenAI is down unfortunately. Please try again later.",
+          );
         },
-        imageUrl || curAudioBase64 ? 20000 : 10000,
+        imageUrl || curAudioBase64 ? 20000 : 1000000,
       );
-
       try {
-        const result = await trieveSDK.createMessageReaderWithQueryId(
-          {
-            topic_id: id || currentTopic,
-            new_message_content: questionProp || currentQuestion,
-            audio_input:
-              curAudioBase64 && curAudioBase64?.length > 0
-                ? curAudioBase64
-                : undefined,
-            image_urls: imageUrl ? [imageUrl] : [],
-            llm_options: {
-              completion_first: false,
+        // wait 5 seconds
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        const createMessageResp =
+          await trieveSDK.createMessageReaderWithQueryId(
+            {
+              topic_id: id || currentTopic,
+              new_message_content: questionProp || currentQuestion,
+              audio_input:
+                curAudioBase64 && curAudioBase64?.length > 0
+                  ? curAudioBase64
+                  : undefined,
+              image_urls: imageUrl ? [imageUrl] : [],
+              llm_options: {
+                completion_first: false,
+              },
+              concat_user_messages_query: true,
+              user_id: fingerprint,
+              page_size: props.searchOptions?.page_size ?? (curGroup ? 10 : 8),
+              score_threshold: props.searchOptions?.score_threshold || null,
+              use_group_search: props.useGroupSearch,
+              filters: createMessageFilter,
+              metadata: {
+                component_props: props,
+              },
+              currency: props.defaultCurrency,
+              highlight_options: {
+                ...defaultHighlightOptions,
+                highlight_delimiters: ["?", ",", ".", "!", "\n"],
+                highlight_window: props.type === "ecommerce" ? 5 : 10,
+                highlight_results: true,
+              },
+              only_include_docs_used: false,
             },
-            concat_user_messages_query: true,
-            user_id: await getFingerprint(),
-            page_size: props.searchOptions?.page_size ?? 8,
-            score_threshold: props.searchOptions?.score_threshold || null,
-            use_group_search: props.useGroupSearch,
-            filters: filters,
-            metadata: {
-              component_props: props,
+            chatMessageAbortController.current.signal,
+            (headers: Record<string, string>) => {
+              if (headers["x-tr-query"] && curAudioBase64) {
+                transcribedQuery = headers["x-tr-query"];
+              }
             },
-            currency: props.defaultCurrency,
-            highlight_options: {
-              ...defaultHighlightOptions,
-              highlight_delimiters: ["?", ",", ".", "!", "\n"],
-              highlight_window: props.type === "ecommerce" ? 5 : 10,
-              highlight_results: true,
-            },
-            only_include_docs_used: true,
-          },
-          chatMessageAbortController.current.signal,
-          (headers: Record<string, string>) => {
-            if (headers["x-tr-query"] && curAudioBase64) {
-              transcribedQuery = headers["x-tr-query"];
-            }
-          },
-        );
-        reader = result.reader;
-        queryId = result.queryId;
+            props.overrideFetch ?? false,
+          );
+        reader = createMessageResp.reader;
+        queryId = createMessageResp.queryId;
 
         clearTimeout(createMessageTimeout);
 
@@ -735,9 +1041,20 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
   };
 
   const stopGeneratingMessage = () => {
-    chatMessageAbortController.current.abort("Stopped generating message");
+    chatMessageAbortController.current.abort(
+      "Stopped generating message AbortError",
+    );
+    relevanceToolCallAbortController.current.abort(
+      "Stopped generating message AbortError",
+    );
+    searchAbortController.current.abort(
+      "Stopped generating message AbortError",
+    );
     chatMessageAbortController.current = new AbortController();
+    relevanceToolCallAbortController.current = new AbortController();
+    searchAbortController.current = new AbortController();
     setIsDoneReading(true);
+    setLoadingText("");
     setIsLoading(false);
 
     if (messages.at(-1)?.text === "Loading...") {
@@ -840,19 +1157,14 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
     }
     scrollToBottomOfChatModalWrapper();
 
-    const defaultMatchAllTags = Object.keys(selectedSidebarFilters)
-      .map((key) => selectedSidebarFilters[key])
-      .flat();
     if (!currentTopic) {
       await createTopic({
         question: questionProp || currentQuestion,
-        defaultMatchAllTags,
       });
     } else {
       await createQuestion({
         question: questionProp || currentQuestion,
         group,
-        defaultMatchAllTags,
       });
     }
   };
@@ -882,6 +1194,7 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
       value={{
         askQuestion,
         isLoading,
+        loadingText,
         cancelGroupChat,
         messages,
         currentQuestion,

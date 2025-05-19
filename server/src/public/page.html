@@ -430,6 +430,17 @@
           max-width: 38rem !important;
         }
       }
+
+      #trieve-search-modal.trieve-inline-modal {
+        width: 600px;
+      }
+
+      #inline-serp-root {
+        width: 100%;
+        max-width: 100%;
+        margin-left: auto;
+        margin-right: auto;
+      }
     </style>
 
     <script type="module">
@@ -444,8 +455,14 @@
           "partnerCompanyUrl": "{{ partner_configuration.COMPANY_URL | safe }}",
           "partnerCompanyFaviconUrl": "{{ partner_configuration.FAVICON_URL | safe }}",
         }
-        if (params.inline) {
+
+        if (params.inline && !params.searchPageProps?.display) {
           const inlineParams = {{ params | tojson }};
+          inlineParams.partnerSettings = {
+            "partnerCompanyName": "{{ partner_configuration.COMPANY_NAME }}",
+            "partnerCompanyUrl": "{{ partner_configuration.COMPANY_URL | safe }}",
+            "partnerCompanyFaviconUrl": "{{ partner_configuration.FAVICON_URL | safe }}",
+          }
           const inlineRoot = document.querySelector("#inline-root");
           inlineParams.cssRelease = mode;
           inlineParams.groupTrackingId = params.singleProductOptions?.groupTrackingId;
@@ -461,6 +478,15 @@
           renderToDiv(inlineRoot, {
             ...inlineParams,
           })
+        }
+
+        if (params.searchPageProps?.display) {
+          const inlineSerpRoot = document.querySelector("#inline-serp-root");
+          const inlineSerpParams = {{ params | tojson }};
+          inlineSerpParams.cssRelease = mode;
+          renderToDiv(inlineSerpRoot, {
+            ...inlineSerpParams,
+          });
         }
 
         if (!params.showResultHighlights) {
@@ -535,7 +561,7 @@
           >
             {% for question in params.defaultAiQuestions %}
             <button
-              class="text-brand-color text-white px-4 py-2 rounded-full text-sm sm:text-base"
+              class="bg-brand-color text-white px-4 py-2 rounded-full text-sm sm:text-base"
             >
               {{ question }}
             </button>
@@ -543,6 +569,9 @@
           </div>
           {% endif %}
         </div>
+        {% if params.searchPageProps and params.searchPageProps.display %}
+        <div id="inline-serp-root"></div>
+        {% endif %}
         {% if params.videoLink and params.videoPosition == "static" %}
         <div
           class="mx-auto py-4 px-8 sm:px-12 lg:max-w-7xl lg:px-20 w-full blurb-html"
@@ -562,7 +591,8 @@
             ></iframe>
           </div>
         </div>
-        {% endif %} {% if params.singleProductOptions and
+        {% endif %} 
+        {% if params.singleProductOptions and
         params.singleProductOptions.productName %} {% include "product.html" %}
         {% endif %} {% if tabs and tabs|length > 0 %} {% include "tabs.html" %}
         {% endif %} {% if params.videoLink and params.videoPosition ==

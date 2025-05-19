@@ -227,6 +227,7 @@ impl Modify for SecurityAddon {
         handlers::group_handler::add_chunk_to_group_by_tracking_id,
         handlers::group_handler::get_chunks_in_group_by_tracking_id,
         handlers::group_handler::search_within_group,
+        handlers::group_handler::autocomplete_search_over_groups,
         handlers::file_handler::get_dataset_files_and_group_ids_handler,
         handlers::file_handler::get_files_cursor_handler,
         handlers::file_handler::upload_file_handler,
@@ -381,6 +382,7 @@ impl Modify for SecurityAddon {
             handlers::analytics_handler::RateQueryRequest,
             handlers::group_handler::AddChunkToGroupReqPayload,
             handlers::group_handler::RecommendGroupsResponseBody,
+            handlers::group_handler::AutocompleteSearchOverGroupsReqPayload,
             handlers::user_handler::UpdateUserReqPayload,
             handlers::organization_handler::CreateApiKeyReqPayload,
             handlers::organization_handler::CreateApiKeyResponse,
@@ -420,6 +422,8 @@ impl Modify for SecurityAddon {
             handlers::organization_handler::CreateOrganizationReqPayload,
             handlers::organization_handler::UpdateOrganizationReqPayload,
             handlers::organization_handler::UpdateAllOrgDatasetConfigsReqPayload,
+            handlers::organization_handler::GetOrganizationApiKeysQuery,
+            handlers::organization_handler::GetOrganizationApiKeysResponse,
             operators::event_operator::EventReturn,
             operators::search_operator::DeprecatedSearchOverGroupsResponseBody,
             operators::search_operator::GroupScoreChunk,
@@ -458,9 +462,16 @@ impl Modify for SecurityAddon {
             handlers::page_handler::OpenGraphMetadata,
             handlers::page_handler::SingleProductOptions,
             handlers::page_handler::PublicPageTag,
+            handlers::page_handler::RelevanceToolCallOptions,
+            handlers::page_handler::PriceToolCallOptions,
             handlers::page_handler::PublicPageTheme,
             handlers::page_handler::PublicPageParameters,
             handlers::page_handler::PublicPageTabMessage,
+            handlers::page_handler::SearchPageProps,
+            handlers::page_handler::FilterSidebarSection,
+            handlers::page_handler::TagProp,
+            handlers::page_handler::RangeSliderConfig,
+            handlers::page_handler::SidebarFilters,
             handlers::page_handler::HeroPattern,
             handlers::etl_handler::CreateSchemaReqPayload,
             handlers::shopify_handler::ShopifyCustomerEvent,
@@ -1241,6 +1252,12 @@ pub fn main() -> std::io::Result<()> {
                                 .service(
                                     web::resource("/group_oriented_search").route(
                                         web::post().to(handlers::group_handler::search_over_groups),
+                                    )
+                                    .wrap(Compress::default())
+                                )
+                                .service(
+                                    web::resource("/group_oriented_autocomplete").route(
+                                        web::post().to(handlers::group_handler::autocomplete_search_over_groups),
                                     )
                                     .wrap(Compress::default())
                                 )

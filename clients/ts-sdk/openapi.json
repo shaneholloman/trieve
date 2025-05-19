@@ -2369,6 +2369,82 @@
         ]
       }
     },
+    "/api/chunk_group/group_oriented_autocomplete": {
+      "post": {
+        "tags": [
+          "Chunk Group"
+        ],
+        "summary": "Autocomplete Search Over Groups",
+        "description": "This route provides the primary autocomplete functionality for the API. This prioritize prefix matching with semantic or full-text search.",
+        "operationId": "autocomplete_search_over_groups",
+        "parameters": [
+          {
+            "name": "TR-Dataset",
+            "in": "header",
+            "description": "The dataset id or tracking_id to use for the request. We assume you intend to use an id if the value is a valid uuid.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "X-API-Version",
+            "in": "header",
+            "description": "The API version to use for this request. Defaults to V2 for orgs created after July 12, 2024 and V1 otherwise.",
+            "required": false,
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/APIVersion"
+                }
+              ],
+              "nullable": true
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "JSON request payload to semantically search for groups",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutocompleteSearchOverGroupsReqPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Groups with embedding vectors which are similar to those in the request body",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SearchOverGroupsResponseBody"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Service error relating to searching",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": [
+              "readonly"
+            ]
+          }
+        ]
+      }
+    },
     "/api/chunk_group/group_oriented_search": {
       "post": {
         "tags": [
@@ -6029,6 +6105,27 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "The cursor to start the pagination from.",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "nullable": true
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "The number of items to return per page.",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "nullable": true
+            }
           }
         ],
         "responses": {
@@ -7871,6 +7968,173 @@
           "use_weights": true
         }
       },
+      "AutocompleteSearchOverGroupsReqPayload": {
+        "type": "object",
+        "required": [
+          "search_type",
+          "query"
+        ],
+        "properties": {
+          "extend_results": {
+            "type": "boolean",
+            "description": "If specified to true, this will extend the search results to include non-exact prefix matches of the same search_type such that a full page_size of results are returned. Default is false.",
+            "nullable": true
+          },
+          "filters": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ChunkFilter"
+              }
+            ],
+            "nullable": true
+          },
+          "group_size": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Group_size is the number of chunks to fetch for each group. The default is 3. If a group has less than group_size chunks, all chunks will be returned. If this is set to a large number, we recommend setting slim_chunks to true to avoid returning the content and chunk_html of the chunks so as to lower the amount of time required for content download and serialization.",
+            "nullable": true,
+            "minimum": 0
+          },
+          "highlight_options": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HighlightOptions"
+              }
+            ],
+            "nullable": true
+          },
+          "metadata": {
+            "description": "Metadata is any metadata you want to associate w/ the event that is created from this request",
+            "nullable": true
+          },
+          "page_size": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Page size is the number of chunks to fetch. This can be used to fetch more than 10 chunks at a time.",
+            "nullable": true,
+            "minimum": 0
+          },
+          "query": {
+            "$ref": "#/components/schemas/SearchModalities"
+          },
+          "remove_stop_words": {
+            "type": "boolean",
+            "description": "If true, stop words (specified in server/src/stop-words.txt in the git repo) will be removed. Queries that are entirely stop words will be preserved.",
+            "nullable": true
+          },
+          "score_threshold": {
+            "type": "number",
+            "format": "float",
+            "description": "Set score_threshold to a float to filter out chunks with a score below the threshold. This threshold applies before weight and bias modifications. If not specified, this defaults to 0.0.",
+            "nullable": true
+          },
+          "scoring_options": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ScoringOptions"
+              }
+            ],
+            "nullable": true
+          },
+          "search_type": {
+            "$ref": "#/components/schemas/SearchMethod"
+          },
+          "slim_chunks": {
+            "type": "boolean",
+            "description": "Set slim_chunks to true to avoid returning the content and chunk_html of the chunks. This is useful for when you want to reduce amount of data over the wire for latency improvement (typically 10-50ms). Default is false.",
+            "nullable": true
+          },
+          "sort_options": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SortOptions"
+              }
+            ],
+            "nullable": true
+          },
+          "typo_options": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/TypoOptions"
+              }
+            ],
+            "nullable": true
+          },
+          "use_quote_negated_terms": {
+            "type": "boolean",
+            "description": "If true, quoted and - prefixed words will be parsed from the queries and used as required and negated words respectively. Default is false.",
+            "nullable": true
+          },
+          "user_id": {
+            "type": "string",
+            "description": "User ID is the id of the user who is making the request. This is used to track user interactions with the search results.",
+            "nullable": true
+          }
+        },
+        "example": {
+          "filters": {
+            "must": [
+              {
+                "field": "metadata.key2",
+                "match": [
+                  "value3",
+                  "value4"
+                ],
+                "range": {
+                  "gt": 0.0,
+                  "gte": 0.0,
+                  "lt": 1.0,
+                  "lte": 1.0
+                }
+              }
+            ],
+            "must_not": [
+              {
+                "field": "metadata.key3",
+                "match": [
+                  "value5",
+                  "value6"
+                ],
+                "range": {
+                  "gt": 0.0,
+                  "gte": 0.0,
+                  "lt": 1.0,
+                  "lte": 1.0
+                }
+              }
+            ],
+            "should": [
+              {
+                "field": "metadata.key1",
+                "match": [
+                  "value1",
+                  "value2"
+                ],
+                "range": {
+                  "gt": 0.0,
+                  "gte": 0.0,
+                  "lt": 1.0,
+                  "lte": 1.0
+                }
+              }
+            ]
+          },
+          "highlight_delimiters": [
+            "?",
+            ",",
+            ".",
+            "!"
+          ],
+          "highlight_results": true,
+          "page": 1,
+          "page_size": 10,
+          "query": "Some search query",
+          "recency_bias": 1.0,
+          "score_threshold": 0.5,
+          "search_type": "semantic",
+          "use_weights": true
+        }
+      },
       "BatchQueuedChunkResponse": {
         "type": "object",
         "title": "batch",
@@ -9339,6 +9603,11 @@
           "dataset_name"
         ],
         "properties": {
+          "clone_chunks": {
+            "type": "boolean",
+            "description": "Parameter to Clone Chunks from the original dataset to the new dataset. defaults to true.",
+            "nullable": true
+          },
           "dataset_name": {
             "type": "string",
             "description": "Name of the dataset."
@@ -9347,14 +9616,6 @@
             "type": "string",
             "format": "uuid",
             "description": "The id of the dataset you want to clone."
-          },
-          "server_configuration": {
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/DatasetConfigurationDTO"
-              }
-            ],
-            "nullable": true
           },
           "tracking_id": {
             "type": "string",
@@ -13038,6 +13299,40 @@
           "updated_at": "2021-01-01 00:00:00.000"
         }
       },
+      "FilterSidebarSection": {
+        "type": "object",
+        "required": [
+          "key",
+          "filterKey",
+          "title",
+          "selectionType",
+          "filterType",
+          "options"
+        ],
+        "properties": {
+          "filterKey": {
+            "type": "string"
+          },
+          "filterType": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TagProp"
+            }
+          },
+          "selectionType": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
       "FloatRange": {
         "type": "object",
         "properties": {
@@ -13593,6 +13888,44 @@
             "items": {
               "type": "string"
             },
+            "nullable": true
+          }
+        }
+      },
+      "GetOrganizationApiKeysQuery": {
+        "type": "object",
+        "properties": {
+          "cursor": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The cursor to start the pagination from.",
+            "nullable": true
+          },
+          "limit": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The number of items to return per page.",
+            "nullable": true
+          }
+        }
+      },
+      "GetOrganizationApiKeysResponse": {
+        "type": "object",
+        "required": [
+          "api_keys"
+        ],
+        "properties": {
+          "api_keys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ApiKeyRespBody"
+            },
+            "description": "The api keys which belong to the organization."
+          },
+          "cursor": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The cursor to start the pagination from.",
             "nullable": true
           }
         }
@@ -15159,6 +15492,25 @@
           }
         }
       },
+      "PriceToolCallOptions": {
+        "type": "object",
+        "required": [
+          "toolDescription"
+        ],
+        "properties": {
+          "maxPriceDescription": {
+            "type": "string",
+            "nullable": true
+          },
+          "minPriceDescription": {
+            "type": "string",
+            "nullable": true
+          },
+          "toolDescription": {
+            "type": "string"
+          }
+        }
+      },
       "PublicDatasetOptions": {
         "type": "object",
         "required": [
@@ -15272,6 +15624,10 @@
             },
             "nullable": true
           },
+          "defaultSearchQuery": {
+            "type": "string",
+            "nullable": true
+          },
           "floatingButtonPosition": {
             "type": "string",
             "nullable": true
@@ -15345,11 +15701,31 @@
             "type": "string",
             "nullable": true
           },
+          "priceToolCallOptions": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/PriceToolCallOptions"
+              }
+            ],
+            "nullable": true
+          },
           "problemLink": {
             "type": "string",
             "nullable": true
           },
+          "relevanceToolCallOptions": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RelevanceToolCallOptions"
+              }
+            ],
+            "nullable": true
+          },
           "responsive": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "searchBar": {
             "type": "boolean",
             "nullable": true
           },
@@ -15357,6 +15733,14 @@
             "allOf": [
               {
                 "$ref": "#/components/schemas/PublicPageSearchOptions"
+              }
+            ],
+            "nullable": true
+          },
+          "searchPageProps": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SearchPageProps"
               }
             ],
             "nullable": true
@@ -16619,6 +17003,21 @@
           }
         ]
       },
+      "RangeSliderConfig": {
+        "type": "object",
+        "properties": {
+          "max": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          },
+          "min": {
+            "type": "number",
+            "format": "double",
+            "nullable": true
+          }
+        }
+      },
       "RateQueryRequest": {
         "type": "object",
         "required": [
@@ -17653,6 +18052,37 @@
           "user_id": {
             "type": "string",
             "description": "The user_id is the id of the user who is making the request. This is used to track user interactions with the RAG results.",
+            "nullable": true
+          }
+        }
+      },
+      "RelevanceToolCallOptions": {
+        "type": "object",
+        "required": [
+          "toolDescription"
+        ],
+        "properties": {
+          "highDescription": {
+            "type": "string",
+            "nullable": true
+          },
+          "includeImages": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "lowDescription": {
+            "type": "string",
+            "nullable": true
+          },
+          "mediumDescription": {
+            "type": "string",
+            "nullable": true
+          },
+          "toolDescription": {
+            "type": "string"
+          },
+          "userMessageTextPrefix": {
+            "type": "string",
             "nullable": true
           }
         }
@@ -18942,6 +19372,14 @@
             "description": "Set score_threshold to a float to filter out chunks with a score below the threshold. This threshold applies before weight and bias modifications. If not specified, this defaults to 0.0.",
             "nullable": true
           },
+          "scoring_options": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ScoringOptions"
+              }
+            ],
+            "nullable": true
+          },
           "search_type": {
             "$ref": "#/components/schemas/SearchMethod"
           },
@@ -19038,6 +19476,23 @@
           },
           "group": {
             "$ref": "#/components/schemas/ChunkGroup"
+          }
+        }
+      },
+      "SearchPageProps": {
+        "type": "object",
+        "properties": {
+          "display": {
+            "type": "boolean",
+            "nullable": true
+          },
+          "filterSidebarProps": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/SidebarFilters"
+              }
+            ],
+            "nullable": true
           }
         }
       },
@@ -19389,6 +19844,14 @@
             "description": "Set score_threshold to a float to filter out chunks with a score below the threshold. This threshold applies before weight and bias modifications. If not specified, this defaults to 0.0.",
             "nullable": true
           },
+          "scoring_options": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ScoringOptions"
+              }
+            ],
+            "nullable": true
+          },
           "search_type": {
             "$ref": "#/components/schemas/SearchMethod"
           },
@@ -19686,6 +20149,18 @@
           },
           "shopify_plan": {
             "$ref": "#/components/schemas/ShopifyPlan"
+          }
+        }
+      },
+      "SidebarFilters": {
+        "type": "object",
+        "properties": {
+          "sections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FilterSidebarSection"
+            },
+            "nullable": true
           }
         }
       },
@@ -20595,6 +21070,31 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "TagProp": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string",
+            "nullable": true
+          },
+          "label": {
+            "type": "string",
+            "nullable": true
+          },
+          "range": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RangeSliderConfig"
+              }
+            ],
+            "nullable": true
+          },
+          "tag": {
+            "type": "string",
+            "nullable": true
           }
         }
       },

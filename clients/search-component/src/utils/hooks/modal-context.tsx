@@ -20,7 +20,6 @@ import {
   searchWithTrieve,
   getPagefindIndex,
 } from "../trieve";
-import { InferenceFilterFormStep } from "../../TrieveModal/FilterSidebarComponents";
 import { getFingerprint } from "@thumbmarkjs/thumbmarkjs";
 
 export const ALL_TAG = {
@@ -53,33 +52,66 @@ export interface PagefindOptions {
 
 export interface TagProp {
   tag: string;
-  label?: string;
+  label: string;
   selected?: boolean;
-  iconClassName?: string;
-  icon?: () => JSX.Element;
   description?: string;
-  child?: FilterSidebarSection;
+  range?: {
+    min?: number;
+    max?: number;
+  };
+}
+
+export const defaultRelevanceToolCallOptions: RelevanceToolCallOptions = {
+  userMessageTextPrefix:
+    "Be extra picky and detailed. Thoroughly examine all details of the query and product.",
+  includeImages: false,
+  toolDescription: "Mark the relevance of product based on the user's query.",
+  highDescription:
+    "Highly relevant and very good fit for the given query taking all details of both the query and the product into account",
+  mediumDescription:
+    "Somewhat relevant and a decent or okay fit for the given query taking all details of both the query and the product into account",
+  lowDescription:
+    "Not relevant and not a good fit for the given query taking all details of both the query and the product into account",
+};
+
+export interface RelevanceToolCallOptions {
+  userMessageTextPrefix?: string;
+  includeImages?: boolean;
+  toolDescription: string;
+  highDescription?: string;
+  mediumDescription?: string;
+  lowDescription?: string;
+}
+
+export const defaultPriceToolCallOptions: PriceToolCallOptions = {
+  toolDescription:
+    "Only call this function if the query includes details about a price. Decide on which price filters to apply to the available catalog being used within the knowledge base to respond. If the question is slightly like a product name, respond with no filters (all false).",
+  minPriceDescription:
+    "Minimum price of the product. Only set this if a minimum price is mentioned in the query.",
+  maxPriceDescription:
+    "Maximum price of the product. Only set this if a maximum price is mentioned in the query.",
+};
+
+export interface PriceToolCallOptions {
+  toolDescription: string;
+  minPriceDescription?: string;
+  maxPriceDescription?: string;
 }
 
 export interface FilterSidebarSection {
   key: string;
+  filterKey: string;
   title: string;
-  selectionType: "single" | "multiple";
-  filterType: "match_any" | "match_all";
+  selectionType: "single" | "multiple" | "range";
+  filterType: "match_any" | "match_all" | "range";
   options: TagProp[];
 }
 
 export interface FilterSidebarProps {
   sections: FilterSidebarSection[];
 }
-
-export interface InferenceFiltersFormProps {
-  steps: InferenceFilterFormStep[];
-}
-
 export interface SearchPageProps {
   filterSidebarProps?: FilterSidebarProps;
-  inferenceFiltersFormProps?: InferenceFiltersFormProps;
   display?: boolean;
 }
 
@@ -114,6 +146,8 @@ export type ModalProps = {
   brandFontFamily?: string;
   openKeyCombination?: { key?: string; label?: string; ctrl?: boolean }[];
   tags?: TagProp[];
+  relevanceToolCallOptions?: RelevanceToolCallOptions;
+  priceToolCallOptions?: PriceToolCallOptions;
   defaultSearchMode?: SearchModes;
   usePagefind?: boolean;
   type?: ModalTypes;
@@ -170,12 +204,17 @@ export type ModalProps = {
   };
   usePortal?: boolean;
   previewTopicId?: string;
+  overrideFetch?: boolean;
+  searchBar?: boolean;
+  defaultSearchQuery?: string;
 };
 
 const defaultProps = {
   datasetId: "",
   apiKey: "",
   baseUrl: "https://api.trieve.ai",
+  relevanceToolCallOptions: defaultRelevanceToolCallOptions,
+  priceToolCallOptions: defaultPriceToolCallOptions,
   defaultSearchMode: "search" as SearchModes,
   placeholder: "Search...",
   chatPlaceholder: "Ask Anything...",
@@ -239,6 +278,8 @@ const defaultProps = {
   } as SearchPageProps,
   usePortal: true,
   previewTopicId: undefined,
+  searchBar: false,
+  defaultSearchQuery: undefined,
 } satisfies ModalProps;
 
 const ModalContext = createContext<{
@@ -277,9 +318,25 @@ const ModalContext = createContext<{
   isRecording: boolean;
   setIsRecording: React.Dispatch<React.SetStateAction<boolean>>;
   // sidebar filter specific state
-  selectedSidebarFilters: Record<string, string[]>; // hashmap where key is the section key and value are the selected labels
+  selectedSidebarFilters: {
+    section: FilterSidebarSection;
+    range?: {
+      min?: number;
+      max?: number;
+    };
+    tags?: string[];
+  }[];
   setSelectedSidebarFilters: React.Dispatch<
-    React.SetStateAction<Record<string, string[]>>
+    React.SetStateAction<
+      {
+        section: FilterSidebarSection;
+        range?: {
+          min?: number;
+          max?: number;
+        };
+        tags?: string[];
+      }[]
+    >
   >;
   minHeight: number;
   resetHeight: () => void;
@@ -318,7 +375,7 @@ const ModalContext = createContext<{
   isRecording: false,
   setIsRecording: () => {},
   // sidebar filter specific state
-  selectedSidebarFilters: {},
+  selectedSidebarFilters: [],
   setSelectedSidebarFilters: () => {},
   minHeight: 0,
   resetHeight: () => {},
@@ -358,8 +415,15 @@ const ModalProvider = ({
   const [pagefind, setPagefind] = useState<PagefindApi | null>(null);
   const [currentGroup, setCurrentGroup] = useState<ChunkGroup | null>(null);
   const [selectedSidebarFilters, setSelectedSidebarFilters] = useState<
-    Record<string, string[]>
-  >({});
+    {
+      section: FilterSidebarSection;
+      range?: {
+        min?: number;
+        max?: number;
+      };
+      tags?: string[];
+    }[]
+  >([]);
   const [minHeight, setMinHeight] = useState(0);
   const [chatHeight, setChatHeight] = useState(0);
   const [enabled, setEnabled] = useState(true);
@@ -377,6 +441,64 @@ const ModalProvider = ({
       return;
     }
 
+    if (
+      props.type === "ecommerce" &&
+      props.inline &&
+      props.defaultSearchMode === "search"
+    ) {
+      const url = new URL(window.location.href);
+      url.searchParams.set("q", query);
+      url.searchParams.set("filters", JSON.stringify(selectedSidebarFilters));
+      window.history.replaceState({}, "", url.toString());
+    }
+
+    const filters: ChunkFilter | undefined =
+      selectedSidebarFilters.length > 0
+        ? {
+            must: [
+              ...selectedSidebarFilters
+                .map(({ section, range, tags }) => {
+                  if (
+                    section.filterType === "match_any" &&
+                    tags &&
+                    tags.length > 0
+                  ) {
+                    return {
+                      field: section.filterKey,
+                      match_any: tags,
+                    };
+                  }
+                  if (
+                    section.filterType === "match_all" &&
+                    tags &&
+                    tags.length > 0
+                  ) {
+                    return {
+                      field: section.filterKey,
+                      match_all: tags,
+                    };
+                  }
+                  if (
+                    section.filterType === "range" &&
+                    range &&
+                    range.min !== undefined &&
+                    range.max !== undefined
+                  ) {
+                    return {
+                      field: section.filterKey,
+                      range: {
+                        gte: range.min,
+                        lte: range.max,
+                      },
+                    };
+                  }
+                  return null;
+                })
+                .filter((filter) => filter !== null),
+            ],
+          }
+        : undefined;
+
     try {
       setLoadingResults(true);
       if (props.useGroupSearch && !props.usePagefind) {
@@ -388,7 +510,7 @@ const ModalProvider = ({
           searchOptions: props.searchOptions,
           trieve: trieve,
           abortController,
-          ...(selectedTags?.map((t) => t.tag) ?? []),
+          filters,
           type: props.type,
         });
         const groupMap = new Map<string, GroupChunk[]>();
@@ -412,7 +534,7 @@ const ModalProvider = ({
           pagefind,
           query,
           props.datasetId,
-          selectedTags?.map((t) => t.tag),
+          filters,
         );
         const groupMap = new Map<string, GroupChunk[]>();
         results.groups.forEach((group) => {
@@ -429,7 +551,7 @@ const ModalProvider = ({
           pagefind,
           query,
           props.datasetId,
-          selectedTags?.map((t) => t.tag),
+          filters,
         );
         setResults(results);
       } else {
@@ -441,7 +563,7 @@ const ModalProvider = ({
           searchOptions: props.searchOptions,
           trieve: trieve,
           abortController,
-          tags: selectedTags?.map((t) => t.tag),
+          filters,
           type: props.type,
         });
         if (results.transcribedQuery && audioBase64) {
@@ -459,6 +581,17 @@ const ModalProvider = ({
       setLoadingResults(false);
     }
   };
+
+  useEffect(() => {
+    const abortController = new AbortController();
+    const timeout = setTimeout(() => {
+      search(abortController);
+    }, 10);
+    return () => {
+      clearTimeout(timeout);
+      abortController.abort();
+    };
+  }, [selectedSidebarFilters]);
 
   useEffect(() => {
     setProps((p) => ({
@@ -548,6 +681,24 @@ const ModalProvider = ({
       abortController.abort("AbortError on component_close");
     };
   }, [open, props.analytics, props]);
+
+  useEffect(() => {
+    if (
+      props.type === "ecommerce" &&
+      props.inline &&
+      props.defaultSearchMode === "search"
+    ) {
+      const url = new URL(window.location.href);
+      const initialQuery = url.searchParams.get("q") || props.defaultSearchQuery;
+      if (initialQuery) {
+        setQuery(initialQuery);
+      }
+      const initialFilters = url.searchParams.get("filters");
+      if (initialFilters) {
+        setSelectedSidebarFilters(JSON.parse(initialFilters));
+      }
+    }
+  }, [props.type, props.inline, props.defaultSearchMode]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {

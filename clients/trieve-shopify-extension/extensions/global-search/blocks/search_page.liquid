@@ -53,6 +53,7 @@
     return value;
   };
 
+
   if (!appMetafieldTrieve.dataset_id || !appMetafieldTrieve.api_key) {
     console.error("Trieve: Cannot render inline Trieve comopnent due to missing dataset_id or api_key in the app metafields");
   } else {
@@ -90,6 +91,10 @@
       },
       chatFilters: {},
       defaultCurrency: currencySymbol(currency),
+      searchPageProps: {
+        filterSidebarProps: {{ app.metafields.trieve.trieve_filter_settings }},
+        display: true,
+      },
       {% comment %} not on global {% endcomment %}
       inlineHeader: "",
       inline: true,
@@ -101,7 +106,7 @@
         },
       },
       hidePrice: false,
-      hideChunkHtml: false
+      hideChunkHtml: true
     });
   }
 </script>

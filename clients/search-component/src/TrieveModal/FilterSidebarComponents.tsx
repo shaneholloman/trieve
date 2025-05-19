@@ -1,81 +1,149 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import React, { useEffect, useMemo } from "react";
 import { useState } from "react";
+import { CheckIcon, ChevronDownIcon, ChevronUpicon, XIcon } from "./icons";
 import {
-  CheckIcon,
-  ChevronDownIcon,
-  ChevronUpicon,
-  LoadingIcon,
-  PhotoIcon,
-  XIcon,
-} from "./icons";
-import {
-  InferenceFiltersFormProps,
+  FilterSidebarProps,
+  FilterSidebarSection,
   useModalState,
 } from "../utils/hooks/modal-context";
-import { toBase64 } from "./Search/UploadImage";
-import { getPresignedUrl, uploadFile } from "../utils/trieve";
-import { ModalContainer } from "./ModalContainer";
-import { retryOperation, useChatState } from "../utils/hooks/chat-context";
-import convert from "heic-convert/browser";
+import { TwoThumbInputRange } from "react-two-thumb-input-range";
+import { GetToolFunctionParamsReqPayload } from "trieve-ts-sdk";
+
+function getCssVar(varName: string) {
+  // Get the root element (or any other element that has the variable)
+  const root = document.documentElement;
+
+  // Get the computed style
+  const styles = getComputedStyle(root);
+
+  // Get the value of the CSS variable
+  // Note: varName should include the -- prefix
+  return styles.getPropertyValue(varName).trim();
+}
 
 export const ActiveFilterPills = () => {
   const { selectedSidebarFilters, setSelectedSidebarFilters } = useModalState();
 
-  const activeFilters: {
+  const activeTagFilters: {
     sectionKey: string;
-    tags: string[];
+    tags?: string[];
   }[] = useMemo(() => {
-    const filters = Object.entries(selectedSidebarFilters).map(
-      ([sectionKey, tags]) => ({
-        sectionKey,
-        tags,
-      }),
+    const filters = selectedSidebarFilters.filter(
+      ({ section }) =>
+        section.filterType === "match_any" ||
+        section.filterType === "match_all",
     );
-    return filters;
+    return filters.map(({ section, tags }) => ({
+      sectionKey: section.key,
+      tags,
+    }));
+  }, [selectedSidebarFilters]);
+
+  const activeRangeFilters: {
+    sectionKey: string;
+    range?: {
+      min?: number;
+      max?: number;
+    };
+  }[] = useMemo(() => {
+    const filters = selectedSidebarFilters.filter(
+      ({ section }) => section.filterType === "range",
+    );
+    return filters.map(({ section, range }) => ({
+      sectionKey: section.key,
+      range: range ?? { min: 0, max: 0 },
+    }));
   }, [selectedSidebarFilters]);
 
   const numberOfSelectedFilters = useMemo(() => {
     let count = 0;
-    for (const { sectionKey } of activeFilters) {
-      if (sectionKey in selectedSidebarFilters) {
-        count += selectedSidebarFilters[sectionKey].length;
-      }
+    for (const item of activeTagFilters) {
+      count += item.tags?.length ?? 0;
     }
+    count += activeRangeFilters.length;
     return count;
   }, [selectedSidebarFilters]);
 
+  const handleRemove = (sectionKey: string, tagToRemove: string) => {
+    const sectionToModify = selectedSidebarFilters.find(
+      ({ section }) => section.key === sectionKey,
+    )?.section;
+    if (sectionToModify?.selectionType === "single") {
+      setSelectedSidebarFilters((prev) => {
+        return prev.filter(({ section }) => section.key !== sectionKey);
+      });
+    } else if (sectionToModify?.selectionType === "multiple") {
+      setSelectedSidebarFilters((prev) => {
+        return prev.map((filter) =>
+          filter.section.key === sectionKey
+            ? {
+                ...filter,
+                tags: filter.tags?.filter((tag) => tag !== tagToRemove),
+              }
+            : filter,
+        );
+      });
+    } else if (sectionToModify?.selectionType === "range") {
+      setSelectedSidebarFilters((prev) => {
+        return prev.filter(({ section }) => section.key !== sectionKey);
+      });
+    }
+  };
+
+  // If no filters are selected, don't render anything
+  if (numberOfSelectedFilters === 0) return null;
+
   return (
-    <div
-      className="trieve-active-filter-pills-container"
-      data-number-selected-filters={numberOfSelectedFilters}
-    >
-      <div className="trieve-all-active-filters">
-        {activeFilters.map(({ sectionKey, tags }) =>
-          tags.map((tag) => (
+    <div className="tv-py-2 tv-px-4 tv-bg-white tv-border-b tv-border-zinc-200 tv-flex tv-flex-wrap tv-items-center tv-justify-between tv-w-full">
+      <div className="tv-flex tv-flex-wrap tv-gap-2">
+        {activeTagFilters.map(({ sectionKey, tags }) =>
+          tags?.map((tag) => (
             <button
-              className="trieve-active-filter-pill"
+              className="tv-inline-flex tv-items-center tv-px-3 tv-py-1.5 tv-rounded-md tv-bg-gray-100 hover:tv-bg-gray-200 tv-text-sm tv-transition-colors"
               key={tag}
               onClick={() => {
-                setSelectedSidebarFilters((prev) => ({
-                  ...prev,
-                  [sectionKey]: prev[sectionKey].filter((t) => t !== tag),
-                }));
+                setSelectedSidebarFilters((prev) =>
+                  prev.filter(({ section }) => section.key !== sectionKey),
+                );
               }}
             >
-              <span>{tag}</span>
-              <i className="trieve-active-filter-pill-remove-icon">
-                <XIcon />
-              </i>
+              <span className="tv-text-gray-800">{tag}</span>
+              <span
+                className="tv-ml-2 tv-flex tv-items-center tv-justify-center"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleRemove(sectionKey, tag);
+                }}
+              >
+                <XIcon className="tv-w-4 tv-h-4 tv-text-gray-500" />
+              </span>
             </button>
           )),
         )}
+        {activeRangeFilters.map(({ sectionKey, range }) => (
+          <button
+            className="tv-inline-flex tv-items-center tv-px-3 tv-py-1.5 tv-rounded-md tv-bg-gray-100 hover:tv-bg-gray-200 tv-text-sm tv-transition-colors"
+            key={`${sectionKey}-${range?.min}-${range?.max}`}
+          >
+            <span className="tv-text-gray-800">
+              ${range?.min} - ${range?.max}
+            </span>
+            <span
+              className="tv-ml-2 tv-flex tv-items-center tv-justify-center"
+              onClick={() => {
+                handleRemove(sectionKey, `${range?.min}-${range?.max}`);
+              }}
+            >
+              <XIcon className="tv-w-4 tv-h-4 tv-text-gray-500" />
+            </span>
+          </button>
+        ))}
       </div>
+
       <button
-        className="trieve-clear-filters-button"
-        data-number-selected-filters={numberOfSelectedFilters}
+        className="tv-px-3 tv-py-1.5 tv-rounded-md tv-text-sm tv-text-gray-800 tv-bg-white tv-border tv-border-gray-300 hover:tv-bg-gray-50 tv-transition-colors"
         onClick={() => {
-          setSelectedSidebarFilters({});
+          setSelectedSidebarFilters([]);
         }}
       >
         Clear all
@@ -83,7 +151,6 @@ export const ActiveFilterPills = () => {
     </div>
   );
 };
-
 export interface AccordionProps {
   sectionKey: string;
   title: string;
@@ -100,14 +167,55 @@ export const Accordion = ({
   onToggle,
 }: AccordionProps) => {
   const { selectedSidebarFilters } = useModalState();
+  const activeTagFilters: {
+    sectionKey: string;
+    tags?: string[];
+  }[] = useMemo(() => {
+    const filters = selectedSidebarFilters.filter(
+      ({ section }) =>
+        (section.filterType === "match_any" ||
+          section.filterType === "match_all") &&
+        section.key === sectionKey,
+    );
+    return filters.map(({ section, tags }) => ({
+      sectionKey: section.key,
+      tags,
+    }));
+  }, [selectedSidebarFilters]);
+
+  const activeRangeFilters: {
+    sectionKey: string;
+    range?: {
+      min?: number;
+      max?: number;
+    };
+  }[] = useMemo(() => {
+    const filters = selectedSidebarFilters.filter(
+      ({ section }) =>
+        section.filterType === "range" && section.key === sectionKey,
+    );
+    return filters.map(({ section, range }) => ({
+      sectionKey: section.key,
+      range: range ?? { min: 0, max: 0 },
+    }));
+  }, [selectedSidebarFilters]);
+
   const [open, setOpen] = useState(defaultOpen);
 
   const numberOfSelectedFilters = useMemo(() => {
-    if (sectionKey in selectedSidebarFilters) {
-      return selectedSidebarFilters[sectionKey].length;
+    let count = 0;
+    for (const item of activeTagFilters) {
+      count += item.tags?.length ?? 0;
     }
-    return 0;
-  }, [sectionKey, selectedSidebarFilters]);
+    count += activeRangeFilters.length;
+    return count;
+  }, [activeTagFilters, activeRangeFilters]);
+
+  useEffect(() => {
+    if (numberOfSelectedFilters > 0) {
+      setOpen(true);
+    }
+  }, [numberOfSelectedFilters]);
 
   return (
     <div
@@ -142,37 +250,70 @@ export const Accordion = ({
         data-open={open ? "true" : "false"}
       >
         <div className="trieve-accordion-content">{children}</div>
-        <hr />
       </div>
     </div>
   );
 };
 
 export interface FilterButtonProps {
-  sectionKey: string;
+  section: FilterSidebarSection;
   filterKey: string;
   label: string;
-  type: "single" | "multiple";
+  type: "single" | "multiple" | "range";
   description?: string;
   onClick?: () => void;
-  isChild?: boolean;
+  range?: {
+    min?: number;
+    max?: number;
+  };
 }
 
 export const FilterButton = ({
-  sectionKey,
+  section,
   filterKey,
   label,
   description,
   type,
   onClick,
-  isChild,
+  range,
 }: FilterButtonProps) => {
   const { selectedSidebarFilters, setSelectedSidebarFilters } = useModalState();
+  const sectionKey = section.key;
+  const activeTagFilters: {
+    sectionKey: string;
+    tags?: string[];
+  }[] = useMemo(() => {
+    const filters = selectedSidebarFilters.filter(
+      ({ section }) =>
+        (section.filterType === "match_any" ||
+          section.filterType === "match_all") &&
+        section.key === sectionKey,
+    );
+    return filters.map(({ section, tags }) => ({
+      sectionKey: section.key,
+      tags,
+    }));
+  }, [selectedSidebarFilters]);
 
+  const activeRangeFilters: {
+    sectionKey: string;
+    range?: {
+      min?: number;
+      max?: number;
+    };
+  }[] = useMemo(() => {
+    const filters = selectedSidebarFilters.filter(
+      ({ section }) =>
+        section.filterType === "range" && section.key === sectionKey,
+    );
+    return filters.map(({ section, range }) => ({
+      sectionKey: section.key,
+      range: range ?? { min: 0, max: 0 },
+    }));
+  }, [selectedSidebarFilters]);
   const active = useMemo(() => {
-    if (sectionKey in selectedSidebarFilters) {
-      const selectedFilters = selectedSidebarFilters[sectionKey];
-      return selectedFilters.includes(filterKey);
+    if (activeTagFilters.some(({ tags }) => tags && tags.includes(filterKey))) {
+      return true;
     }
     return false;
   }, [sectionKey, filterKey, selectedSidebarFilters]);
@@ -181,981 +322,398 @@ export const FilterButton = ({
     if (type === "single") {
       if (active) {
         setSelectedSidebarFilters((prev) => {
-          if (isChild) {
-            return {
-              ...prev,
-              [sectionKey]: prev[sectionKey].filter(
-                (item) => item !== filterKey,
-              ),
-            };
-          }
-
-          return {
-            ...prev,
-            [sectionKey]: [],
-          };
+          return prev.filter(({ section }) => section.key !== sectionKey);
         });
       } else {
-        setSelectedSidebarFilters((prev) => {
-          if (isChild) {
-            const currentFilters = prev[sectionKey] || [];
-            const newFilters = [];
-            if (currentFilters.length > 0) {
-              newFilters.push(currentFilters[0]);
-            }
-            newFilters.push(filterKey);
-
-            return {
-              ...prev,
-              [sectionKey]: newFilters,
-            };
-          }
-
-          return {
-            ...selectedSidebarFilters,
-            [sectionKey]: [filterKey],
-          };
-        });
+        const existingFilter = selectedSidebarFilters.filter(
+          ({ section }) => section.key === sectionKey,
+        );
+        if (existingFilter.length > 0) {
+          setSelectedSidebarFilters((prev) => {
+            return prev.map((filter) =>
+              filter.section.key === sectionKey
+                ? { ...filter, tags: [filterKey] }
+                : filter,
+            );
+          });
+        } else {
+          setSelectedSidebarFilters((prev) => {
+            return prev.concat([
+              {
+                section: section,
+                tags: [filterKey],
+              },
+            ]);
+          });
+        }
       }
-    } else {
+    } else if (type === "multiple") {
+      // Multiple selection type
       if (active) {
-        setSelectedSidebarFilters({
-          ...selectedSidebarFilters,
-          [sectionKey]: selectedSidebarFilters[sectionKey].filter(
-            (item) => item !== filterKey,
-          ),
+        setSelectedSidebarFilters((prev) => {
+          return prev.map((filter) =>
+            filter.section.key === sectionKey
+              ? {
+                  ...filter,
+                  tags: filter.tags?.filter((tag) => tag !== filterKey),
+                }
+              : filter,
+          );
         });
       } else {
-        setSelectedSidebarFilters({
-          ...selectedSidebarFilters,
-          [sectionKey]: [
-            ...(selectedSidebarFilters[sectionKey] || []),
-            filterKey,
-          ],
-        });
+        const existingFilter = selectedSidebarFilters.filter(
+          ({ section }) => section.key === sectionKey,
+        );
+        if (existingFilter.length > 0) {
+          setSelectedSidebarFilters((prev) => {
+            return prev.map((filter) =>
+              filter.section.key === sectionKey
+                ? { ...filter, tags: [...(filter.tags ?? []), filterKey] }
+                : filter,
+            );
+          });
+        } else {
+          setSelectedSidebarFilters((prev) => {
+            return prev.concat([
+              {
+                section: section,
+                tags: [filterKey],
+              },
+            ]);
+          });
+        }
       }
     }
     if (onClick) onClick();
   };
 
-  return (
-    <button className="trieve-filter-button-container" onClick={handleClick}>
-      <div
-        className={`trieve-${type}-button`}
-        data-active={active ? "true" : "false"}
-      >
-        <div className="trieve-circle" />
-        <i className="trieve-checkbox-icon">
-          <CheckIcon />
-        </i>
-      </div>
-      <label className="trieve-filter-button-label" title={description}>
-        {label}
-      </label>
-    </button>
-  );
-};
+  const [min, max] = useMemo(() => {
+    return [
+      activeRangeFilters.find(({ sectionKey }) => sectionKey === sectionKey)
+        ?.range?.min ?? 0,
+      activeRangeFilters.find(({ sectionKey }) => sectionKey === sectionKey)
+        ?.range?.max ?? 10000,
+    ];
+  }, [activeRangeFilters, sectionKey]);
 
-export interface SearchQueryState {
-  query: string;
-  loading: boolean;
-}
-
-export interface TextFieldState {
-  inferenceValue: string;
-  inputValue?: string;
-  loading: boolean;
-}
-
-export interface InferenceFilterFormStep {
-  title: string;
-  description: string;
-  type: "image" | "tags" | "search_modal" | "text";
-  placeholder?: string;
-  filterSidebarSectionKey?: string;
-  prompt?: string;
-  inferenceInputLabel?: string;
-  inputLabel?: string;
-}
-
-export const InferenceFiltersForm = ({ steps }: InferenceFiltersFormProps) => {
-  const {
-    trieveSDK,
-    props,
-    setSelectedSidebarFilters,
-    selectedSidebarFilters,
-  } = useModalState();
-  const { fingerprint } = useModalState();
-  const { askQuestion, clearConversation, stopGeneratingMessage } =
-    useChatState();
-  const [images, setImages] = useState<Record<string, File>>({});
-  const [imageUrls, setImageUrls] = useState<Record<string, string>>({});
-  const [textFields, setTextFields] = useState<Record<string, TextFieldState>>(
-    {},
-  );
-  const [loadingStates, setLoadingStates] = useState<Record<string, string>>(
-    {},
-  );
-  const [filterOptions, setFilterOptions] = useState<Record<string, string[]>>(
-    {},
-  );
-  const [completedSteps, setCompletedSteps] = useState<Record<string, boolean>>(
-    {},
-  );
-
-  useEffect(() => {
-    for (let i = 1; i < steps.length; i++) {
-      if (completedSteps[steps[i].title]) {
-        continue;
-      }
-
-      const correspondingFilter =
-        props.searchPageProps?.filterSidebarProps?.sections.find(
-          (section) => section.key === steps[i].filterSidebarSectionKey,
+  const handleChange = (values: [number, number]) => {
+    if (values[0] > values[1]) {
+      return;
+    }
+    setSelectedSidebarFilters((prev) => {
+      const existingRangeFilter = prev.find(
+        ({ section }) =>
+          section.key === sectionKey && section.filterType === "range",
+      );
+      if (existingRangeFilter) {
+        return prev.map((filter) =>
+          filter.section.key === sectionKey
+            ? { ...filter, range: { min: values[0], max: values[1] } }
+            : filter,
         );
-      if (!correspondingFilter?.options) {
-        continue;
+      } else {
+        return prev.concat([
+          {
+            section: section,
+            range: { min: values[0], max: values[1] },
+          },
+        ]);
       }
-
-      const prevStep = steps[i - 1];
-      if (!completedSteps[prevStep.title]) {
-        continue;
-      }
-
-      const match_all_tags: string[] = [];
-      if (match_all_tags.length === 0) {
-        match_all_tags.push(...correspondingFilter.options.map((t) => t.tag));
-      }
-
-      setFilterOptions((prev) => {
-        const newFilterOptions = {
-          ...prev,
-          [steps[i].filterSidebarSectionKey ?? ""]: match_all_tags,
-        };
-
-        return newFilterOptions;
-      });
-
-      setLoadingStates((prev) => ({
-        ...prev,
-        [steps[i].title]: "idle",
-      }));
-    }
-  }, [completedSteps]);
-
-  useEffect(() => {
-    const firstMessageInferenceAbortController = new AbortController();
-    for (let i = 1; i < steps.length; i++) {
-      if (completedSteps[steps[i].title]) {
-        continue;
-      }
-
-      if (steps[i].type === "search_modal") {
-        const prevFilter = steps[i - 1].filterSidebarSectionKey;
-        const selectedTags = selectedSidebarFilters[prevFilter ?? ""];
-        if (!completedSteps[steps[i - 1].title]) {
-          continue;
-        }
-
-        (async () => {
-          setLoadingStates((prev) => ({
-            ...prev,
-            [steps[i].title]: "Figuring out what will look good...",
-          }));
-          stopGeneratingMessage();
-          clearConversation();
-
-          const prevStep = i > 1 ? steps[i - 2] : null;
-          const prevInferenceText = prevStep
-            ? (textFields[prevStep.title]?.inferenceValue ?? "")
-            : "";
-          const prevInputText = prevStep
-            ? (textFields[prevStep.title]?.inputValue ?? "")
-            : "";
-          let promptDescription = `${steps[i].prompt ?? ""} ${selectedTags.join(", ")}`;
-          if (prevInferenceText) {
-            promptDescription += `\n\n[Context for the existing space]:\n${prevInferenceText}`;
-          }
-          if (prevInputText) {
-            promptDescription += `\n\n[User's goal for the space (take more into account than anything else)]:\n${prevInputText}`;
-          }
-
-          let retries = 0;
-          let replacementMaterialDescriptionReader = null;
-          while (!replacementMaterialDescriptionReader) {
-            try {
-              const firstMessageInferenceAbortController =
-                new AbortController();
-              const timeoutId = setTimeout(() => {
-                firstMessageInferenceAbortController.abort(
-                  "Timeout after 10 seconds",
-                );
-              }, 10000);
-
-              replacementMaterialDescriptionReader =
-                await trieveSDK.ragOnChunkReader(
-                  {
-                    chunk_ids: [],
-                    image_urls: Object.values(imageUrls).filter((url) => url),
-                    prev_messages: [
-                      {
-                        content: promptDescription,
-                        role: "user",
-                      },
-                    ],
-                    prompt: "",
-                    stream_response: true,
-                    user_id: fingerprint.toString(),
-                  },
-                  firstMessageInferenceAbortController.signal,
-                );
-
-              clearTimeout(timeoutId);
-              break;
-            } catch (error) {
-              retries++;
-              console.error(`Attempt ${retries} failed:`, error);
-
-              if (retries >= 3) {
-                console.error("Max retries reached, giving up");
-                throw error;
-              }
-
-              await new Promise((resolve) => setTimeout(resolve, 500));
-            }
-          }
-
-          setLoadingStates((prev) => ({
-            ...prev,
-            [steps[i].title]: "Generating search query...",
-          }));
-
-          let done = false;
-          let textInStream = "";
-          while (!done) {
-            const { value, done: doneReading } =
-              await replacementMaterialDescriptionReader.read();
-            if (doneReading) {
-              done = doneReading;
-              setLoadingStates((prev) => ({
-                ...prev,
-                [steps[i].title]: "idle",
-              }));
-              if (prevInferenceText) {
-                textInStream += `\n\n[Context on my space]:\n${prevInferenceText}`;
-              }
-              if (prevInputText) {
-                textInStream += `\n\n[My goal for the space]:\n${prevInputText}`;
-              }
-
-              askQuestion(textInStream, undefined, false);
-
-              setCompletedSteps((prev) => ({
-                ...prev,
-                [steps[i].title]: true,
-              }));
-            } else if (value) {
-              const decoder = new TextDecoder();
-              const newText = decoder.decode(value);
-              textInStream += newText;
-            }
-          }
-        })();
-      }
-    }
-
-    return () => {
-      firstMessageInferenceAbortController.abort();
-    };
-  }, [completedSteps]);
-
-  useEffect(() => {
-    const textInferenceAbortController = new AbortController();
-    for (let i = 1; i < steps.length; i++) {
-      if (steps[i].type === "text") {
-        const prevStep = steps[i - 1];
-        const image_url = imageUrls[prevStep.title];
-        if (!image_url) {
-          continue;
-        }
-
-        (async () => {
-          setLoadingStates((prev) => ({
-            ...prev,
-            [steps[i].title]: "Understanding your space...",
-          }));
-
-          let retries = 0;
-          let replacementMaterialDescriptionReader = null;
-          while (!replacementMaterialDescriptionReader) {
-            try {
-              const firstMessageInferenceAbortController =
-                new AbortController();
-              const timeoutId = setTimeout(() => {
-                firstMessageInferenceAbortController.abort(
-                  "Timeout after 10 seconds",
-                );
-              }, 10000);
-
-              replacementMaterialDescriptionReader =
-                await trieveSDK.ragOnChunkReader(
-                  {
-                    chunk_ids: [],
-                    image_urls: Object.values(imageUrls).filter((url) => url),
-                    prev_messages: [
-                      {
-                        content: `${steps[i].prompt ?? ""}`,
-                        role: "user",
-                      },
-                    ],
-                    prompt: "",
-                    stream_response: true,
-                    user_id: fingerprint.toString(),
-                  },
-                  textInferenceAbortController.signal,
-                );
-
-              clearTimeout(timeoutId);
-              break;
-            } catch (error) {
-              retries++;
-              console.error(`Attempt ${retries} failed:`, error);
-
-              if (retries >= 3) {
-                console.error("Max retries reached, giving up");
-                throw error;
-              }
-
-              await new Promise((resolve) => setTimeout(resolve, 500));
-            }
-          }
-
-          setLoadingStates((prev) => ({
-            ...prev,
-            [steps[i].title]: "Generating style analysis...",
-          }));
-
-          let done = false;
-          let textInStream = "";
-          while (!done) {
-            const { value, done: doneReading } =
-              await replacementMaterialDescriptionReader.read();
-            if (doneReading) {
-              done = doneReading;
-              setLoadingStates((prev) => ({
-                ...prev,
-                [steps[i].title]: "idle",
-              }));
-              setTextFields((prev) => ({
-                ...prev,
-                [steps[i].title]: {
-                  inferenceValue: textInStream,
-                  loading: false,
-                },
-              }));
-            } else if (value) {
-              const decoder = new TextDecoder();
-              const newText = decoder.decode(value);
-              textInStream += newText;
-              setTextFields((prev) => ({
-                ...prev,
-                [steps[i].title]: {
-                  inferenceValue: textInStream,
-                  loading: false,
-                },
-              }));
-            }
-          }
-        })();
-      }
-    }
-
-    return () => {
-      textInferenceAbortController.abort();
-    };
-  }, [imageUrls]);
-
+    });
+  };
   return (
-    <div className="trieve-inference-filters-form">
-      {steps.map((step, index) => (
-        <div
-          className="trieve-inference-filters-step-container"
-          key={index}
-          data-prev-complete={
-            index == 0 || completedSteps[steps[index - 1].title]
-              ? "true"
-              : "false"
-          }
+    <>
+      {type !== "range" && (
+        <button
+          className="trieve-filter-button-container"
+          onClick={handleClick}
         >
-          <div className="trieve-inference-filters-step-header">
-            <div
-              className="trieve-inference-filters-step-number"
-              data-completed={images[step.title] ? "true" : "false"}
-            >
-              <span>{index + 1}</span>
-            </div>
-            <h2 className="trieve-inference-filters-step-title">
-              {step.title}
-            </h2>
-          </div>
-          <p className="trieve-inference-filters-step-description">
-            {step.description}
-          </p>
           <div
-            className="trieve-inference-filters-step-input-container"
-            data-loading-state={loadingStates[step.title] ?? "idle"}
+            className={`trieve-${type}-button`} // This class can be 'trieve-single-button' or 'trieve-multiple-button'
+            data-active={active ? "true" : "false"}
           >
-            <div
-              className="trieve-image-input-container"
-              data-input-field-type={step.type}
-              data-image-selected={images[step.title] ? "true" : "false"}
-              onDragOver={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-              }}
-              onDrop={async (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                stopGeneratingMessage();
-                clearConversation();
-                setCompletedSteps((prev) => {
-                  const newCompletedSteps = { ...prev };
-                  for (let j = index; j < steps.length; j++) {
-                    newCompletedSteps[steps[j].title] = false;
-                  }
-                  return newCompletedSteps;
-                });
-                setSelectedSidebarFilters((prev) => {
-                  for (let j = index; j < steps.length; j++) {
-                    prev[steps[j].filterSidebarSectionKey ?? ""] = [];
-                  }
-                  return prev;
-                });
-                setTextFields((prev) => {
-                  const newTextFields = { ...prev };
-                  for (let j = index; j < steps.length; j++) {
-                    newTextFields[steps[j].title] = {
-                      inferenceValue: "",
-                      inputValue: "",
-                      loading: false,
-                    };
-                  }
-                  return newTextFields;
-                });
-                const files = e.dataTransfer.files;
-                let processedFile =
-                  (files?.length ?? 1) > 0 ? files?.[0] : null;
-                if (!processedFile) {
-                  return;
-                }
-
-                if (
-                  processedFile.type === "image/heic" ||
-                  processedFile.name.toLowerCase().endsWith(".heic")
-                ) {
-                  try {
-                    const buffer = await processedFile.arrayBuffer();
-                    const convertedFile = await convert({
-                      buffer: new Uint8Array(buffer) as unknown as ArrayBuffer,
-                      format: "PNG",
-                    });
-                    processedFile = new File(
-                      [convertedFile],
-                      processedFile.name.replace(/\.heic$/i, ".png"),
-                      {
-                        type: "image/png",
-                        lastModified: Date.now(),
-                      },
-                    );
-                  } catch (err) {
-                    console.error("HEIC conversion failed:", err);
-                    return;
-                  }
-                }
-
-                setImages((prev) => ({
-                  ...prev,
-                  [step.title]: processedFile,
-                }));
-                setLoadingStates((prev) => ({
-                  ...prev,
-                  [step.title]: "Uploading image...",
-                }));
-                retryOperation(() => toBase64(processedFile))
-                  .then(async (data) => {
-                    const base64File = data
-                      .split(",")[1]
-                      .replace(/\+/g, "-")
-                      .replace(/\//g, "_")
-                      .replace(/=+$/, "");
-
-                    const fileId = await retryOperation(() =>
-                      uploadFile(trieveSDK, processedFile.name, base64File),
-                    );
-                    const imageUrl = await retryOperation(() =>
-                      getPresignedUrl(trieveSDK, fileId),
-                    );
-                    setImageUrls((prev) => ({
-                      ...prev,
-                      [step.title]: imageUrl,
-                    }));
-                    setLoadingStates((prev) => ({
-                      ...prev,
-                      [step.title]: "idle",
-                    }));
-                    setCompletedSteps((prev) => ({
-                      ...prev,
-                      [step.title]: true,
-                    }));
-                  })
-                  .catch((error) => {
-                    console.error("Operation failed after retries:", error);
-                  });
-              }}
-              onClick={() => {
-                const input = document.createElement("input");
-                input.type = "file";
-                input.accept = "image/*, .heic, .HEIC";
-                input.multiple = false;
-                input.onchange = async (e) => {
-                  stopGeneratingMessage();
-                  clearConversation();
-                  setCompletedSteps((prev) => {
-                    const newCompletedSteps = { ...prev };
-                    for (let j = index; j < steps.length; j++) {
-                      newCompletedSteps[steps[j].title] = false;
-                    }
-                    return newCompletedSteps;
-                  });
-                  setSelectedSidebarFilters((prev) => {
-                    for (let j = index; j < steps.length; j++) {
-                      prev[steps[j].filterSidebarSectionKey ?? ""] = [];
-                    }
-                    return prev;
-                  });
-                  setTextFields((prev) => {
-                    const newTextFields = { ...prev };
-                    for (let j = index; j < steps.length; j++) {
-                      newTextFields[steps[j].title] = {
-                        inferenceValue: "",
-                        inputValue: "",
-                        loading: false,
-                      };
-                    }
-                    return newTextFields;
-                  });
-                  const files = (e.target as HTMLInputElement).files;
-                  let processedFile =
-                    (files?.length ?? 1) > 0 ? files?.[0] : null;
-                  if (!processedFile) {
-                    return;
-                  }
-
-                  if (
-                    processedFile.type === "image/heic" ||
-                    processedFile.name.toLowerCase().endsWith(".heic")
-                  ) {
-                    try {
-                      const buffer = await processedFile.arrayBuffer();
-                      const convertedFile = await convert({
-                        buffer: new Uint8Array(
-                          buffer,
-                        ) as unknown as ArrayBuffer,
-                        format: "PNG",
-                      });
-                      processedFile = new File(
-                        [convertedFile],
-                        processedFile.name.replace(/\.heic$/i, ".png"),
-                        {
-                          type: "image/png",
-                          lastModified: Date.now(),
-                        },
-                      );
-                    } catch (err) {
-                      console.error("HEIC conversion failed:", err);
-                      return;
-                    }
-                  }
-
-                  setImages((prev) => ({
-                    ...prev,
-                    [step.title]: processedFile,
-                  }));
-                  setLoadingStates((prev) => ({
-                    ...prev,
-                    [step.title]: "Uploading image...",
-                  }));
-                  retryOperation(() => toBase64(processedFile))
-                    .then(async (data) => {
-                      const base64File = data
-                        .split(",")[1]
-                        .replace(/\+/g, "-")
-                        .replace(/\//g, "_")
-                        .replace(/=+$/, "");
-
-                      const fileId = await retryOperation(() =>
-                        uploadFile(trieveSDK, processedFile.name, base64File),
-                      );
-                      const imageUrl = await retryOperation(() =>
-                        getPresignedUrl(trieveSDK, fileId),
-                      );
-                      setImageUrls((prev) => ({
-                        ...prev,
-                        [step.title]: imageUrl,
-                      }));
-                      setLoadingStates((prev) => ({
-                        ...prev,
-                        [step.title]: "idle",
-                      }));
-                      setCompletedSteps((prev) => ({
-                        ...prev,
-                        [step.title]: true,
-                      }));
-                    })
-                    .catch((error) => {
-                      console.error("Operation failed after retries:", error);
-                    });
-                };
-
-                input.click();
-              }}
-            >
-              <i
-                className="trieve-image-input-icon"
-                data-image-selected={images[step.title] ? "true" : "false"}
-              >
-                <PhotoIcon />
+            {type === "multiple" && active && (
+              <i className="trieve-checkbox-icon">
+                <CheckIcon />
               </i>
-              <img
-                className="trieve-image-input-preview"
-                src={
-                  images[step.title]
-                    ? URL.createObjectURL(images[step.title])
-                    : ""
-                }
-                alt=""
-                data-image-selected={images[step.title] ? "true" : "false"}
-              />
-              <p className="trieve-image-input-placeholder">
-                {step.placeholder}
-              </p>
-            </div>
-
-            <div
-              className="trieve-text-step-container"
-              data-input-field-type={step.type}
-              data-prev-complete={
-                index == 0 || completedSteps[steps[index - 1].title]
-                  ? "true"
-                  : "false"
-              }
-              data-completed={completedSteps[step.title] ? "true" : "false"}
-            >
-              <div className="trieve-text-input-container">
-                <label
-                  htmlFor="ai-understanding-input"
-                  className="trieve-text-input-label"
-                >
-                  {step.inferenceInputLabel ?? "AI Understanding"}
-                </label>
-                <div className="trieve-text-input-textarea-container">
-                  <textarea
-                    name="ai-understanding-input"
-                    rows={4}
-                    className="trieve-text-input-textarea"
-                    value={textFields[step.title]?.inferenceValue}
-                    onChange={(e) => {
-                      setCompletedSteps((prev) => {
-                        const newCompletedSteps = { ...prev };
-                        for (let j = index; j < steps.length; j++) {
-                          newCompletedSteps[steps[j].title] = false;
-                        }
-                        return newCompletedSteps;
-                      });
-                      setTextFields((prev) => ({
-                        ...prev,
-                        [step.title]: {
-                          ...prev[step.title],
-                          inferenceValue: e.target.value,
-                        },
-                      }));
-                    }}
+            )}
+            {type === "single" && <div className="trieve-circle" />}
+          </div>
+          <label className="trieve-filter-button-label" title={description}>
+            {label}
+          </label>
+        </button>
+      )}
+      {type === "range" && (
+        <div className="tv-pb-3">
+          <div className="tv-flex tv-flex-col tv-gap-2">
+            <div className="tv-flex tv-justify-between tv-items-center tv-gap-3">
+              <div className="tv-relative tv-flex-1">
+                <div className="tv-w-[90%] tv-flex tv-items-center tv-rounded-md tv-border tv-border-gray-200 tv-bg-gray-50 tv-overflow-hidden">
+                  <span className="tv-pl-3 tv-pr-1 tv-text-gray-500">$</span>
+                  <input
+                    type="number"
+                    className="tv-w-full !tv-shadow-none tv-bg-transparent focus:tv-outline-none tv-outline-none tv-border-none"
+                    value={min}
+                    onChange={(e) =>
+                      handleChange([parseInt(e.target.value), max])
+                    }
                   />
                 </div>
               </div>
 
-              {step.inputLabel && (
-                <div className="trieve-text-input-container">
-                  <label
-                    htmlFor="text-input"
-                    className="trieve-text-input-label"
-                  >
-                    {step.inputLabel}
-                  </label>
-                  <div className="trieve-text-input-textarea-container">
-                    <textarea
-                      name="text-input"
-                      rows={4}
-                      className="trieve-text-input-textarea"
-                      placeholder={step.placeholder}
-                      value={textFields[step.title]?.inputValue}
-                      onChange={(e) => {
-                        setCompletedSteps((prev) => {
-                          const newCompletedSteps = { ...prev };
-                          for (let j = index; j < steps.length; j++) {
-                            newCompletedSteps[steps[j].title] = false;
-                          }
-                          return newCompletedSteps;
-                        });
-                        setTextFields((prev) => ({
-                          ...prev,
-                          [step.title]: {
-                            ...prev[step.title],
-                            inputValue: e.target.value,
-                          },
-                        }));
-                      }}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {(loadingStates[steps[index + 1]?.title] ?? "idle") == "idle" && (
-                <div className="trieve-text-button-container">
-                  <button
-                    type="button"
-                    className="trieve-text-input-button"
-                    disabled={!textFields[step.title]?.inputValue}
-                    onClick={() => {
-                      setLoadingStates((prev) => ({
-                        ...prev,
-                        [steps[index + 1]?.title]:
-                          "Predicting your material categories",
-                      }));
-                      const topLevelFilters =
-                        props.searchPageProps?.filterSidebarProps?.sections.find(
-                          (section) =>
-                            section.key ===
-                            steps[index + 1].filterSidebarSectionKey,
-                        )?.options;
-                      trieveSDK
-                        .getToolCallFunctionParams({
-                          user_message_text:
-                            textFields[step.title]?.inputValue ?? "",
-                          tool_function: {
-                            description:
-                              "Call this tool no matter what. Predict the best category for the provided input",
-                            name: "predict_best_category",
-                            parameters:
-                              topLevelFilters?.map((filterOption) => {
-                                return {
-                                  name: filterOption.tag,
-                                  description: filterOption.description ?? "",
-                                  parameter_type: "boolean",
-                                };
-                              }) ?? [],
-                          },
-                        })
-                        .then((res) => {
-                          const parameters: any = res.parameters ?? {};
-                          for (const key of Object.keys(parameters)) {
-                            if (parameters[key] === true) {
-                              setSelectedSidebarFilters((prev) => ({
-                                ...prev,
-                                [steps[index + 1].filterSidebarSectionKey ??
-                                ""]: [key],
-                              }));
-                            }
-                          }
-                          setLoadingStates((prev) => ({
-                            ...prev,
-                            [steps[index + 1]?.title]: "idle",
-                          }));
-                          setCompletedSteps((prev) => ({
-                            ...prev,
-                            [step.title]: true,
-                          }));
-                        });
-                    }}
-                  >
-                    Next
-                    <div>
-                      <i className="fa-solid fa-arrow-right"></i>
-                    </div>
-                  </button>
-                </div>
-              )}
-            </div>
-
-            <div
-              className="trieve-inference-filters-step-tags-container"
-              data-input-field-type={step.type}
-              data-prev-complete={
-                index == 0 || completedSteps[steps[index - 1].title]
-                  ? "true"
-                  : "false"
-              }
-              data-completed={completedSteps[step.title] ? "true" : "false"}
-            >
-              <div
-                className="trieve-inference-filters-step-tags"
-                data-prev-complete={
-                  index == 0 || completedSteps[steps[index - 1].title]
-                    ? "true"
-                    : "false"
-                }
-              >
-                <p className="trieve-inference-filters-step-tags-section-title">
-                  {props.searchPageProps?.filterSidebarProps?.sections.find(
-                    (section) => section.key === step.filterSidebarSectionKey,
-                  )?.title ?? ""}
-                </p>
-                <div className="trieve-inference-filters-step-row">
-                  {filterOptions[step.filterSidebarSectionKey ?? ""]?.map(
-                    (tag, i) => {
-                      const currentFilterOption =
-                        props.searchPageProps?.filterSidebarProps?.sections
-                          .find(
-                            (section) =>
-                              section.key === step.filterSidebarSectionKey,
-                          )
-                          ?.options?.find((option) => option.tag === tag);
-
-                      return (
-                        <FilterButton
-                          key={`${i}-${tag}`}
-                          sectionKey={step.filterSidebarSectionKey ?? ""}
-                          filterKey={tag}
-                          label={currentFilterOption?.label ?? tag}
-                          type={"single"}
-                          onClick={() => {
-                            stopGeneratingMessage();
-                            clearConversation();
-                            setCompletedSteps((prev) => {
-                              const newCompletedSteps = { ...prev };
-                              for (let j = index; j < steps.length; j++) {
-                                newCompletedSteps[steps[j].title] = false;
-                              }
-                              return newCompletedSteps;
-                            });
-                          }}
-                        />
-                      );
-                    },
-                  )}
-                </div>
-
-                <div className="trieve-inference-filters-step-row">
-                  {filterOptions[step.filterSidebarSectionKey ?? ""]?.map(
-                    (tag, i) => {
-                      const active =
-                        selectedSidebarFilters[
-                          step.filterSidebarSectionKey ?? ""
-                        ]?.includes(tag);
-
-                      const currentFilterOption =
-                        props.searchPageProps?.filterSidebarProps?.sections
-                          .find(
-                            (section) =>
-                              section.key === step.filterSidebarSectionKey,
-                          )
-                          ?.options?.find((option) => option.tag === tag);
-
-                      return (
-                        <div
-                          key={`${i}-${tag}-child`}
-                          data-active={active ? "true" : "false"}
-                          className="trieve-inference-filters-step-tags-children"
-                        >
-                          <p className="trieve-inference-filters-step-tags-section-title">
-                            {currentFilterOption?.child?.title ?? ""}
-                          </p>
-                          <div className="trieve-inference-filters-step-row">
-                            {currentFilterOption?.child?.options?.map(
-                              (childTagProp) => (
-                                <FilterButton
-                                  key={`${i}-${childTagProp.tag}`}
-                                  sectionKey={
-                                    step.filterSidebarSectionKey ?? ""
-                                  }
-                                  filterKey={childTagProp.tag}
-                                  label={childTagProp.label ?? childTagProp.tag}
-                                  type={
-                                    currentFilterOption?.child?.selectionType ??
-                                    "single"
-                                  }
-                                  isChild={true}
-                                  onClick={() => {
-                                    stopGeneratingMessage();
-                                    clearConversation();
-                                    setCompletedSteps((prev) => {
-                                      const newCompletedSteps = { ...prev };
-                                      for (
-                                        let j = index;
-                                        j < steps.length;
-                                        j++
-                                      ) {
-                                        newCompletedSteps[steps[j].title] =
-                                          false;
-                                      }
-                                      return newCompletedSteps;
-                                    });
-                                  }}
-                                />
-                              ),
-                            )}
-                          </div>
-                        </div>
-                      );
-                    },
-                  )}
-                </div>
+              <div className="tv-flex tv-items-center tv-justify-center">
+                <div className="tv-w-4 tv-h-0.5 tv-bg-gray-300"></div>
               </div>
 
-              <div className="trieve-text-button-container">
-                <button
-                  type="button"
-                  className="trieve-text-input-button"
-                  onClick={() => {
-                    setCompletedSteps((prev) => ({
-                      ...prev,
-                      [step.title]: true,
-                    }));
-                  }}
-                >
-                  Next
-                  <div>
-                    <i className="fa-solid fa-arrow-right"></i>
-                  </div>
-                </button>
+              <div className="tv-relative tv-flex-1">
+                <div className="tv-w-[90%] tv-flex tv-items-center tv-rounded-md tv-border tv-border-gray-200 tv-bg-gray-50 tv-overflow-hidden">
+                  <span className="tv-pl-3 tv-pr-1 tv-text-gray-500">$</span>
+                  <input
+                    type="number"
+                    className="tv-w-full !tv-shadow-none tv-bg-transparent tv-focus:outline-none"
+                    value={max}
+                    onChange={(e) =>
+                      handleChange([min, parseInt(e.target.value)])
+                    }
+                  />
+                </div>
               </div>
             </div>
-
-            <div
-              className="trieve-inference-filters-search-modal-container"
-              data-prev-complete={
-                index == 0 || completedSteps[steps[index - 1].title]
-                  ? "true"
-                  : "false"
-              }
-              data-input-field-type={step.type}
-            >
-              {step.type === "search_modal" && (
-                <div className="trieve-inference-filters-search-modal">
-                  <ModalContainer />
-                </div>
-              )}
+            <div className="tv-mt-1 tv-w-[100%] !tv-shadow-none">
+              <TwoThumbInputRange
+                onChange={handleChange}
+                values={[min, max]}
+                min={range?.min ?? 0}
+                max={range?.max ?? 10000}
+                trackColor={getCssVar("--tv-prop-brand-color")}
+                thumbColor={getCssVar("--tv-prop-brand-color")}
+                showLabels={false}
+                inputStyle={{
+                  width: "225px",
+                  boxShadow: "none",
+                  textShadow: "none",
+                }}
+              />
             </div>
-          </div>
-          <div
-            className="trieve-inference-filters-step-loading-container"
-            data-loading-state={loadingStates[step.title] ?? "idle"}
-          >
-            <LoadingIcon className="loading" />
-            <p className="trieve-loading-text">{loadingStates[step.title]}</p>
           </div>
         </div>
-      ))}
-    </div>
+      )}
+    </>
+  );
+};
+
+const SendIcon = () => {
+  return (
+    <svg fill="currentColor" strokeWidth="0" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" height="1em" width="1em" style={{overflow: "visible", color: "currentColor"}}><path d="m1 1.91.78-.41L15 7.449v.95L1.78 14.33 1 13.91 2.583 8 1 1.91ZM3.612 8.5 2.33 13.13 13.5 7.9 2.33 2.839l1.282 4.6L9 7.5v1H3.612Z"></path></svg>
+  );
+};
+
+const LoadingIcon = () => {
+  return (
+   <svg fill="currentColor" stroke-width="0" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" height="1em" width="1em" style={{overflow: "visible", color: "currentColor"}}><path d="M988 548c-19.9 0-36-16.1-36-36 0-59.4-11.6-117-34.6-171.3a440.45 440.45 0 0 0-94.3-139.9 437.71 437.71 0 0 0-139.9-94.3C629 83.6 571.4 72 512 72c-19.9 0-36-16.1-36-36s16.1-36 36-36c69.1 0 136.2 13.5 199.3 40.3C772.3 66 827 103 874 150c47 47 83.9 101.8 109.7 162.7 26.7 63.1 40.2 130.2 40.2 199.3.1 19.9-16 36-35.9 36z"></path></svg>
+  );
+};
+
+export const FilterSidebar = ({ sections }: FilterSidebarProps) => {
+  const [sidebarText, setSidebarText] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
+  const { trieveSDK, setSelectedSidebarFilters } = useModalState();
+
+const handleSubmit = async() => {
+  if (sidebarText.trim() === "") return;
+  
+  try {
+    setIsLoading(true);
+    const toolCallPromises = sections.map((section) => {
+      let toolCallData: GetToolFunctionParamsReqPayload;
+      
+      if (section.filterType === "match_any" || section.filterType === "match_all") {
+        toolCallData = {
+          user_message_text: sidebarText,
+          tool_function: {
+            name: "infer_filters",
+            description: `
+              Analyze the user's query to determine relevant filters for "${section.title}".
+              ${section.selectionType === "single" 
+                ? "Select only the single most relevant filter that best matches the query intent." 
+                : "Select all filters that directly relate to the query's explicit or implied needs."}
+              If the query contains no clear relation to these filters, return all as false.
+              Consider synonyms and related concepts when matching filters to query terms.
+            `,
+            parameters: section.options.map((option) => ({
+              name: option.tag,
+              parameter_type: "boolean",
+              description: `${option.label}: ${option.description}
+                Select this filter only if the user's query explicitly mentions or strongly implies a need for content related to this specific category.`,
+            })),
+          },
+        };
+        return trieveSDK.getToolCallFunctionParams(toolCallData);
+      } else if (section.filterType === "range" && section.selectionType === "range") {
+        toolCallData = {
+          user_message_text: sidebarText,
+          tool_function: {
+            name: "infer_filters",
+            description: `
+              Analyze the user's query for numerical range preferences related to "${section.title}".
+              Valid range: ${section.options[0].range?.min} to ${section.options[0].range?.max}.
+              If the query specifies or implies a numerical range (e.g., "under 50", "between 100-200", "at least 300"):
+                - Extract the minimum and maximum values that satisfy the user's intent
+                - Keep values within allowed bounds
+              If no range is specified or implied, don't apply this filter (return null for both values).
+              Interpret qualitative terms appropriately (e.g., "affordable" = lower range, "premium" = higher range).
+            `,
+            parameters: [
+              {
+                name: "min_value",
+                parameter_type: "number",
+                description: `Minimum value for ${section.title}. 
+                  Extract from explicit values ("over 50") or implied ranges ("affordable").
+                  Return null if the query doesn't specify or imply a minimum.`,
+              },
+              {
+                name: "max_value",
+                parameter_type: "number",
+                description: `Maximum value for ${section.title}.
+                  Extract from explicit values ("under 100") or implied ranges ("budget-friendly").
+                  Return null if the query doesn't specify or imply a maximum.`,
+              },
+            ],
+          },
+        };
+        return trieveSDK.getToolCallFunctionParams(toolCallData);
+      } 
+      
+      return Promise.resolve(null); 
+    });
+
+    const toolCalls = await Promise.all(toolCallPromises);
+
+    setSelectedSidebarFilters((prev) => {
+      if (prev.length !== 0) {
+        return prev.map((filter, index) => {
+          const toolCall = toolCalls[index];
+
+        if (!toolCall) return filter;
+        if (sections[index].filterType === "range" && sections[index].selectionType === "range") {
+          const parameters = toolCall.parameters as { min_value: number, max_value: number };
+          const minValue = Math.max(parameters.min_value, sections[index].options[0].range?.min || 0);
+          const maxValue = Math.min(parameters.max_value, sections[index].options[0].range?.max || Infinity);
+          if (filter.section.key === sections[index].key) {
+            return { ...filter, range: { min: minValue, max: maxValue } };
+          }
+        } else {
+          const selectedTags = Object.entries(toolCall.parameters as Record<string, boolean>)
+            .filter(([, isSelected]) => isSelected)
+            .map(([tag]) => tag);
+            
+          if (filter.section.key === sections[index].key) {
+            return { ...filter, tags: selectedTags };
+          }
+        }
+        
+        return filter;
+      });
+    } else {
+     return sections.map((section, index) => {
+       const toolCall = toolCalls[index];
+
+        if (!toolCall) return { section: section };
+        if (sections[index].filterType === "range" && sections[index].selectionType === "range") {
+          const parameters = toolCall.parameters as { min_value: number, max_value: number };
+          const minValue = Math.max(parameters.min_value, sections[index].options[0].range?.min || 0);
+          const maxValue = Math.min(parameters.max_value, sections[index].options[0].range?.max || Infinity);
+          if (section.key === sections[index].key) {
+            return { section, range: { min: minValue, max: maxValue } };
+          }
+        } else {
+          const selectedTags = Object.entries(toolCall.parameters as Record<string, boolean>)
+            .filter(([, isSelected]) => isSelected)
+            .map(([tag]) => tag);
+            
+          if (section.key === sections[index].key) {
+            return { section, tags: selectedTags };
+          }
+        }
+        
+        return { section: section };
+     })
+    }
+    });
+  } catch (error) {
+    console.error("Error processing filters:", error);
+  } finally {
+    setIsLoading(false);
+  }
+};
+
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault(); 
+      handleSubmit();
+    }
+  };
+
+
+  return (
+    <aside className="trieve-filter-sidebar">
+      <div className="trieve-filter-sidebar-textarea-container tv-p-2.5 tv-border-b tv-border-gray-200">
+        <div className="tv-flex tv-flex-col tv-mb-2">
+        <div className="tv-text-sm tv-text-black-500">
+            Choose your filters with AI
+          </div>
+        <div className="tv-relative tv-flex tv-items-center">
+          <textarea
+            value={sidebarText}
+            onChange={(e) => setSidebarText(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="blue or red under 100"
+            className="tv-w-full tv-min-h-[40px] tv-p-1 tv-pr-10 tv-border tv-border-gray-300 tv-rounded-md focus:tv-outline-none focus:tv-ring-1 focus:tv-ring-blue-500 focus:tv-border-blue-500 tv-resize-none"
+          />
+          {isLoading ? (
+            <div className="tv-absolute tv-right-2 tv-p-2 tv-h-[40px] tv-flex tv-items-center tv-justify-center tv-text-gray-500 tv-animate-spin">
+              <LoadingIcon />
+            </div>
+          ) : (
+            <button
+              onClick={handleSubmit}
+              className="tv-absolute tv-right-2 tv-p-2 tv-h-[40px] tv-flex tv-items-center tv-justify-center tv-text-gray-500 hover:tv-text-blue-500 focus:tv-outline-none"
+          >
+            <SendIcon />
+          </button>
+          )}
+        </div>
+        </div>
+      </div>      
+      <div className="trieve-filter-sidebar-section">
+        {sections.map((section) => (
+          <Accordion
+            key={section.key}
+            sectionKey={section.key}
+            title={section.title}
+          >
+            <div className="trieve-filter-sidebar-options">
+              {section.options.map((option) => (
+                <div key={option.tag}>
+                  <div className="trieve-filter-sidebar-child-options">
+                    <div className="trieve-filter-sidebar-child-options-list">
+                      <FilterButton
+                        key={option.tag}
+                        section={section}
+                        filterKey={option.tag}
+                        label={option.label}
+                        type={section.selectionType}
+                        range={option.range}
+                      />
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Accordion>
+        ))}
+      </div>
+    </aside>
   );
 };

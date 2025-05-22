@@ -54,11 +54,11 @@
   };
 
   if (!appMetafieldTrieve.dataset_id || !appMetafieldTrieve.api_key) {
-    console.error("Trieve: Cannot render inline Trieve comopnent due to missing dataset_id or api_key in the app metafields");
+    console.error("Trieve: Cannot render inline Trieve component due to missing dataset_id or api_key in the app metafields");
   } else {
     renderToDiv(inlineRoot, {
       type: "ecommerce",
-      baseUrl: "https://api.trieve.ai",
+      baseUrl: {% if dev_mode %} "http://localhost:8090" {% else %} "https://api.trieve.ai" {% endif %},
       cssRelease: cssRelease,
       useGroupSearch: false,
       hideOpenButton: true,
@@ -77,9 +77,12 @@
       openLinksInNewTab: toBool(getValue("{{ block.settings.open_links_new_tab }}", true)),
       theme: getValue("{{ block.settings.theme }}", "light"),
       showTrieve: false,
+      relevanceToolCallOptions: appMetafieldTrieve.relevance_tool_call_options,
+      priceToolCallOptions: appMetafieldTrieve.price_tool_call_options,
       getCartQuantity: (trackingId) => {
         return checkCartQuantity(parseInt(trackingId));
       },
+      experimentIds: appMetafieldTrieve.ab_tests?.pdpExperimentIds || [],
       searchOptions: {
         use_autocomplete: true,
         search_type: "fulltext",
@@ -101,7 +104,8 @@
         },
       },
       hidePrice: false,
-      hideChunkHtml: false
+      hideChunkHtml: false,
+      systemPrompt: appMetafieldTrieve.pdp_prompt,
     });
   }
 </script>

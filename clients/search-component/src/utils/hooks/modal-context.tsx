@@ -115,6 +115,21 @@ export interface SearchPageProps {
   display?: boolean;
 }
 
+export interface AiQuestion {
+  questionText: string;
+  promptForAI?: string;
+  products?: {
+    id: string;
+    groupId: string;
+  }[];
+}
+
+export function isAiQuestion(
+  question: string | AiQuestion,
+): question is AiQuestion {
+  return typeof question === "object" && "questionText" in question;
+}
+
 export type ModalProps = {
   datasetId: string;
   apiKey: string;
@@ -138,7 +153,7 @@ export type ModalProps = {
   followupQuestions?: boolean;
   numberOfSuggestions?: number;
   defaultSearchQueries?: string[];
-  defaultAiQuestions?: string[];
+  defaultAiQuestions?: string[] | AiQuestion[];
   brandLogoImgSrcUrl?: string;
   brandName?: string;
   problemLink?: string;
@@ -207,6 +222,9 @@ export type ModalProps = {
   overrideFetch?: boolean;
   searchBar?: boolean;
   defaultSearchQuery?: string;
+  experimentIds?: string[];
+  systemPrompt?: string;
+  imageStarterText?: string;
 };
 
 const defaultProps = {
@@ -280,6 +298,9 @@ const defaultProps = {
   previewTopicId: undefined,
   searchBar: false,
   defaultSearchQuery: undefined,
+  experimentIds: [],
+  systemPrompt: undefined,
+  imageStarterText: undefined,
 } satisfies ModalProps;
 
 const ModalContext = createContext<{
@@ -341,6 +362,8 @@ const ModalContext = createContext<{
   minHeight: number;
   resetHeight: () => void;
   addHeight: (height: number) => void;
+  display: boolean;
+  abTreatment?: string;
 }>({
   props: defaultProps,
   trieveSDK: (() => {}) as unknown as TrieveSDK,
@@ -381,6 +404,8 @@ const ModalContext = createContext<{
   resetHeight: () => {},
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   addHeight: (height: number) => {},
+  display: true,
+  abTreatment: undefined,
 });
 
 const ModalProvider = ({
@@ -427,6 +452,10 @@ const ModalProvider = ({
   const [minHeight, setMinHeight] = useState(0);
   const [chatHeight, setChatHeight] = useState(0);
   const [enabled, setEnabled] = useState(true);
+  const [display, setDisplay] = useState(
+    !props.experimentIds || props.experimentIds.length === 0,
+  );
+  const [abTreatment, setAbTreatment] = useState<string | undefined>(undefined);
 
   const trieve = new TrieveSDK({
     baseUrl: props.baseUrl,
@@ -512,6 +541,7 @@ const ModalProvider = ({
           abortController,
           filters,
           type: props.type,
+          abTreatment,
         });
         const groupMap = new Map<string, GroupChunk[]>();
         results.groups.forEach((group) => {
@@ -565,6 +595,7 @@ const ModalProvider = ({
           abortController,
           filters,
           type: props.type,
+          abTreatment,
         });
         if (results.transcribedQuery && audioBase64) {
           setQuery(results.transcribedQuery);
@@ -613,6 +644,34 @@ const ModalProvider = ({
   }, []);
 
   useEffect(() => {
+    if (
+      props.experimentIds &&
+      props.experimentIds.length > 0 &&
+      fingerprint !== ""
+    ) {
+      for (const experimentId of props.experimentIds) {
+        trieve
+          .getTreatment({
+            experiment_id: experimentId,
+            user_id: fingerprint,
+          })
+          .then((treatment) => {
+            if (treatment.treatment_name === "Don't show") {
+              setDisplay(false);
+            } else {
+              setDisplay(true);
+            }
+            setAbTreatment(treatment.treatment_name);
+            window.localStorage.setItem(
+              `ab-treatment`,
+              treatment.treatment_name,
+            );
+          });
+      }
+    }
+  }, [props.experimentIds, fingerprint]);
+
+  useEffect(() => {
     getFingerprint().then((fingerprint) => {
       setFingerprint(fingerprint);
     });
@@ -637,6 +696,7 @@ const ModalProvider = ({
               location: window.location.href,
               metadata: {
                 component_props: props,
+                ab_treatment: abTreatment,
               },
             },
             abortController.signal,
@@ -667,6 +727,7 @@ const ModalProvider = ({
               location: window.location.href,
               metadata: {
                 component_props: props,
+                ab_treatment: abTreatment,
               },
             },
             abortController.signal,
@@ -689,7 +750,8 @@ const ModalProvider = ({
       props.defaultSearchMode === "search"
     ) {
       const url = new URL(window.location.href);
-      const initialQuery = url.searchParams.get("q") || props.defaultSearchQuery;
+      const initialQuery =
+        url.searchParams.get("q") || props.defaultSearchQuery;
       if (initialQuery) {
         setQuery(initialQuery);
       }
@@ -814,6 +876,8 @@ const ModalProvider = ({
         minHeight,
         resetHeight,
         addHeight,
+        display,
+        abTreatment,
       }}
     >
       {children}

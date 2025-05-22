@@ -5,6 +5,7 @@
  */
 
 import {
+  AnalyticsQuery,
   ClusterAnalytics,
   ComponentAnalytics,
   CTRAnalytics,
@@ -461,3 +462,38 @@ export async function getAllAnalyticsEvents(
     signal,
   );
 }
+
+
+/**
+ * Function that allows you to run a custom clickhouse query
+ * 
+ * Example:
+ * ```js
+ *const data = await trieve.getAnalytics({
+  query: new AnalyticsQueryBuilder()
+    .select('event_type')
+    .from('events')
+    .where(AnalyticsQueryBuilder.and([
+      AnalyticsQueryBuilder.eq('event_type', 'view'),
+      AnalyticsQueryBuilder.eq('user_id', 'user1')
+    ]))
+});
+ * ```
+ */
+export async function getAnalytics(
+  /** @hidden */
+  this: TrieveSDK,
+  data: AnalyticsQuery,
+  signal?: AbortSignal,
+) {
+  return this.trieve.fetch(
+    "/api/analytics",
+    "post",
+    {
+      data,
+      datasetId: this.datasetId || "",
+    },
+    signal,
+  );
+}
+ 

@@ -47,8 +47,8 @@ export default function App() {
         <Link to="/app/chat" rel="chat">
           Analytics
         </Link>
-        <Link to="/app/filters" rel="filters">
-          Filters
+        <Link to="/app/experiments" rel="experiments">
+          Experiments
         </Link>
         <Link to="/app/settings" rel="settings">
           Settings

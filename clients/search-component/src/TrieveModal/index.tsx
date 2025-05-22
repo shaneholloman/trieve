@@ -21,7 +21,8 @@ import { createPortal } from "react-dom";
 
 const Modal = () => {
   useKeyboardNavigation();
-  const { open, setOpen, setMode, setQuery, props } = useModalState();
+  const { open, setOpen, setMode, setQuery, props, display, abTreatment } =
+    useModalState();
   const { askQuestion, chatWithGroup, cancelGroupChat, clearConversation } =
     useChatState();
 
@@ -87,6 +88,7 @@ const Modal = () => {
                 location: window.location.href,
                 metadata: {
                   component_props: props,
+                  ab_treatment: abTreatment,
                 },
               },
               abortController.signal,
@@ -99,6 +101,10 @@ const Modal = () => {
             items: [],
             user_id: fingerprint,
             location: window.location.href,
+            metadata: {
+              component_props: props,
+              ab_treatment: abTreatment,
+            },
           });
         }
       }
@@ -281,7 +287,7 @@ const Modal = () => {
             )}
           </>
         )}
-        {(props.displayModal ?? true) && <ModalContainer />}
+        {(props.displayModal ?? true) && display && <ModalContainer />}
       </>
       {props.showFloatingSearchIcon &&
         props.usePortal &&

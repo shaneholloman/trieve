@@ -129,6 +129,8 @@ pub struct CreateMessageReqPayload {
     pub typo_options: Option<TypoOptions>,
     /// Metadata is any metadata you want to associate w/ the event that is created from this request
     pub metadata: Option<serde_json::Value>,
+    /// Overrides what the way chunks are placed into the context window
+    pub rag_context: Option<String>,
 }
 
 /// Create message
@@ -414,6 +416,8 @@ pub struct RegenerateMessageReqPayload {
     pub typo_options: Option<TypoOptions>,
     /// Metadata is any metadata you want to associate w/ the event that is created from this request
     pub metadata: Option<serde_json::Value>,
+    /// Overrides what the way chunks are placed into the context window
+    pub rag_context: Option<String>,
 }
 
 #[derive(Serialize, Debug, ToSchema)]
@@ -466,6 +470,8 @@ pub struct EditMessageReqPayload {
     pub typo_options: Option<TypoOptions>,
     /// Metadata is any metadata you want to associate w/ the event that is created from this request
     pub metadata: Option<serde_json::Value>,
+    /// Overrides what the way chunks are placed into the context window
+    pub rag_context: Option<String>,
 }
 
 impl From<EditMessageReqPayload> for CreateMessageReqPayload {
@@ -494,6 +500,7 @@ impl From<EditMessageReqPayload> for CreateMessageReqPayload {
             remove_stop_words: data.remove_stop_words,
             typo_options: data.typo_options,
             metadata: data.metadata,
+            rag_context: data.rag_context,
         }
     }
 }
@@ -524,6 +531,7 @@ impl From<RegenerateMessageReqPayload> for CreateMessageReqPayload {
             remove_stop_words: data.remove_stop_words,
             typo_options: data.typo_options,
             metadata: data.metadata,
+            rag_context: data.rag_context,
         }
     }
 }
@@ -957,6 +965,8 @@ pub struct GetToolFunctionParamsReqPayload {
     pub tool_function: ToolFunction,
     /// Model name to use for the completion. If not specified, this defaults to the dataset's model.
     pub model: Option<String>,
+    /// Temperature to use for the completion. If not specified, this defaults to the dataset's temperature.
+    pub temperature: Option<f64>,
 }
 
 #[derive(Deserialize, Serialize, Debug, ToSchema)]
@@ -1077,7 +1087,11 @@ pub async fn get_tool_function_params(
         organization: None,
     };
 
-    let parameters = ChatCompletionParametersBuilder::default()
+    let temperature = data.temperature.or(dataset_config.TEMPERATURE);
+
+    let mut parameters_builder = ChatCompletionParametersBuilder::default();
+
+    parameters_builder
         .model(chosen_model)
         .messages(vec![ChatMessage::User {
             content: ChatMessageContent::ContentPart(message_content_parts),
@@ -1112,13 +1126,17 @@ pub async fn get_tool_function_params(
                         .collect::<Vec<String>>(),
                 }),
             },
-        }])
-        .build()
-        .map_err(|err| {
-            ServiceError::BadRequest(format!(
-                "Failed to build tool call parameters completion API call params because: {err}"
-            ))
-        })?;
+        }]);
+
+    if let Some(temperature) = temperature {
+        parameters_builder.temperature(temperature as f32);
+    }
+
+    let parameters = parameters_builder.build().map_err(|err| {
+        ServiceError::BadRequest(format!(
+            "Failed to build tool call parameters completion API call params because: {err}"
+        ))
+    })?;
 
     let result = client.chat().create(parameters).await.map_err(|err| {
         ServiceError::BadRequest(format!(
@@ -1325,7 +1343,11 @@ pub async fn edit_image(
         DatasetConfiguration::from_json(dataset_org_plan_sub.dataset.clone().server_configuration);
 
     let llm_api_key = get_llm_api_key(&dataset_config);
-    let base_url = dataset_config.LLM_BASE_URL.clone();
+    let mut base_url = dataset_config.LLM_BASE_URL.clone();
+
+    if !base_url.contains("openai.com") {
+        base_url = "https://api.openai.com/v1".to_string();
+    }
 
     let client = Client {
         headers: None,

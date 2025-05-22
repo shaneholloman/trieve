@@ -100,14 +100,14 @@ export const Message = ({
   message,
   idx,
 }: {
-  idx: number;
   message: Message;
+  idx: number;
 }) => {
   const { rateChatCompletion, messages, productsWithClicks, loadingText } =
     useChatState();
   const [positive, setPositive] = React.useState<boolean | null>(null);
   const [copied, setCopied] = React.useState<boolean>(false);
-  const { props, trieveSDK, fingerprint } = useModalState();
+  const { props, trieveSDK, fingerprint, abTreatment } = useModalState();
 
   useEffect(() => {
     if (props.analytics) {
@@ -130,6 +130,7 @@ export const Message = ({
             return chunk.tracking_id ?? "";
           }),
           fingerprint,
+          abTreatment,
         });
       }
     }
@@ -189,6 +190,7 @@ export const Message = ({
                 requestID: message.queryId,
                 chunkID: item.id,
                 fingerprint,
+                abTreatment,
               });
             }
           }}
@@ -285,6 +287,7 @@ export const Message = ({
               requestID: message.queryId,
               chunkID: item.id,
               fingerprint,
+              abTreatment,
             });
           }
         }}
@@ -351,6 +354,7 @@ export const Message = ({
               requestID: message.queryId,
               chunkID: item.id,
               fingerprint,
+              abTreatment,
             });
           }
         }}
@@ -380,7 +384,21 @@ export const Message = ({
         <div
           className={`system${props.type === "ecommerce" ? " ecommerce" : ""}`}
         >
+          {message.imageUrl && (
+            <>
+              <Carousel>{ecommerceItems}</Carousel>
+              <div className="tv-mb-4">
+                <img
+                  src={message.imageUrl}
+                  alt="Response image"
+                  className="tv-max-w-full tv-rounded-lg tv-shadow-md"
+                  style={{ maxHeight: "300px", objectFit: "contain" }}
+                />
+              </div>
+            </>
+          )}
           {message.additional &&
+            !message.imageUrl &&
             props.type === "ecommerce" &&
             (!props.inline ||
               props.inlineCarousel ||

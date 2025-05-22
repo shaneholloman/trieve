@@ -84,7 +84,7 @@ export const themeListQuery = (fetcher: AdminApiCaller) => {
       const result = await fetcher(
         `#graphql
 query GetStoreThemes {
-  themes(first:50){
+  themes(first:250){
     nodes{
       name
       prefix
@@ -129,11 +129,11 @@ export const lastStepIdQuery = (fetcher: AdminApiCaller) => {
   return {
     queryKey: ["last_step_id"],
     queryFn: async () => {
-      const result = await getAppMetafields<string>(fetcher, ONBOARD_STEP_META_FIELD);
-      if (
-        !result ||
-        !onboardingSteps.some((s) => s.id === result)
-      ) {
+      const result = await getAppMetafields<string>(
+        fetcher,
+        ONBOARD_STEP_META_FIELD,
+      );
+      if (!result || !onboardingSteps.some((s) => s.id === result)) {
         return onboardingSteps[0].id;
       }
       return result;

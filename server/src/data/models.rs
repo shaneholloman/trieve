@@ -3628,6 +3628,9 @@ impl DatasetConfigurationDTO {
                     search_bar: page_parameters_self
                         .search_bar
                         .or(page_parameters_curr.search_bar),
+                    image_starter_text: page_parameters_self
+                        .image_starter_text
+                        .or(page_parameters_curr.image_starter_text),
                 }),
             },
             DISABLE_ANALYTICS: self
@@ -4514,6 +4517,7 @@ impl ApiKeyRequestParams {
     ) -> CreateMessageReqPayload {
         CreateMessageReqPayload {
             new_message_content: payload.new_message_content,
+            rag_context: payload.rag_context,
             topic_id: payload.topic_id,
             user_id: payload.user_id,
             sort_options: payload.sort_options,
@@ -8906,6 +8910,7 @@ pub struct ExperimentClickhouse {
     #[serde(with = "clickhouse::serde::uuid")]
     pub id: uuid::Uuid,
     pub name: String,
+    pub area: String,
     pub t1_name: String,
     pub t1_split: f32,
     pub control_name: String,
@@ -8922,6 +8927,7 @@ pub struct ExperimentClickhouse {
 pub struct Experiment {
     pub id: uuid::Uuid,
     pub name: String,
+    pub area: String,
     pub t1_name: String,
     pub t1_split: f32,
     pub control_name: String,
@@ -8936,6 +8942,7 @@ impl From<Experiment> for ExperimentClickhouse {
         ExperimentClickhouse {
             id: experiment.id,
             name: experiment.name,
+            area: experiment.area,
             t1_name: experiment.t1_name,
             t1_split: experiment.t1_split,
             control_name: experiment.control_name,
@@ -8954,6 +8961,7 @@ impl From<ExperimentClickhouse> for Experiment {
         Experiment {
             id: experiment.id,
             name: experiment.name,
+            area: experiment.area,
             t1_name: experiment.t1_name,
             t1_split: experiment.t1_split,
             control_name: experiment.control_name,
@@ -9413,6 +9421,7 @@ impl<'de> Deserialize<'de> for CreateMessageReqPayload {
             pub only_include_docs_used: Option<bool>,
             pub currency: Option<String>,
             metadata: Option<serde_json::Value>,
+            pub rag_context: Option<String>,
             #[serde(flatten)]
             other: std::collections::HashMap<String, serde_json::Value>,
             use_quote_negated_terms: Option<bool>,
@@ -9453,6 +9462,7 @@ impl<'de> Deserialize<'de> for CreateMessageReqPayload {
             context_options,
             no_result_message: helper.no_result_message,
             metadata: helper.metadata,
+            rag_context: helper.rag_context,
             only_include_docs_used: helper.only_include_docs_used,
             use_quote_negated_terms: helper.use_quote_negated_terms,
             remove_stop_words: helper.remove_stop_words,
@@ -9490,6 +9500,7 @@ impl<'de> Deserialize<'de> for RegenerateMessageReqPayload {
             pub use_quote_negated_terms: Option<bool>,
             pub remove_stop_words: Option<bool>,
             pub typo_options: Option<TypoOptions>,
+            pub rag_context: Option<String>,
         }
 
         let mut helper = Helper::deserialize(deserializer)?;
@@ -9526,6 +9537,7 @@ impl<'de> Deserialize<'de> for RegenerateMessageReqPayload {
             use_quote_negated_terms: helper.use_quote_negated_terms,
             remove_stop_words: helper.remove_stop_words,
             typo_options: helper.typo_options,
+            rag_context: helper.rag_context,
         })
     }
 }
@@ -9563,6 +9575,7 @@ impl<'de> Deserialize<'de> for EditMessageReqPayload {
             pub use_quote_negated_terms: Option<bool>,
             pub remove_stop_words: Option<bool>,
             pub typo_options: Option<TypoOptions>,
+            pub rag_context: Option<String>,
         }
 
         let mut helper = Helper::deserialize(deserializer)?;
@@ -9603,6 +9616,7 @@ impl<'de> Deserialize<'de> for EditMessageReqPayload {
             use_quote_negated_terms: helper.use_quote_negated_terms,
             remove_stop_words: helper.remove_stop_words,
             typo_options: helper.typo_options,
+            rag_context: helper.rag_context,
         })
     }
 }

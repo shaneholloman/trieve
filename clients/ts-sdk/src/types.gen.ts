@@ -18,6 +18,42 @@ export type AddChunkToGroupReqPayload = {
     chunk_tracking_id?: (string) | null;
 };
 
+export type AggregationType = 'SUM' | 'COUNT' | 'AVG' | 'MIN' | 'MAX';
+
+/**
+ * Represents a complete Analytics query with parameters
+ */
+export type AnalyticsQuery = {
+    /**
+     * Simple columns to select
+     */
+    columns: Array<Column>;
+    cte_query?: ((CommonTableExpression) | null);
+    /**
+     * Complex expressions to select
+     */
+    expressions?: Array<Expression> | null;
+    /**
+     * WHERE clause conditions
+     */
+    filter_conditions?: Array<FilterCondition> | null;
+    group_by?: ((GroupBy) | null);
+    /**
+     * Tables to join with
+     */
+    joins?: Array<JoinClause> | null;
+    /**
+     * LIMIT clause
+     */
+    limit?: (number) | null;
+    /**
+     * OFFSET clause
+     */
+    offset?: (number) | null;
+    order_by?: ((OrderBy) | null);
+    table: TableName;
+};
+
 /**
  * The default parameters which will be forcibly used when the api key is given on a request. If not provided, the api key will not have default parameters.
  */
@@ -675,6 +711,21 @@ export type ClusterAnalyticsFilter = {
 
 export type ClusterAnalyticsResponse = SearchClusterResponse | SearchQueryResponse;
 
+/**
+ * Represents a column with optional aggregation and alias
+ */
+export type Column = {
+    aggregation?: ((AggregationType) | null);
+    alias?: (string) | null;
+    distinct?: (boolean) | null;
+    name: string;
+};
+
+export type CommonTableExpression = {
+    alias: string;
+    query: SubQuery;
+};
+
 export type ComponentAnalytics = {
     filter?: ((ComponentAnalyticsFilter) | null);
     granularity?: ((Granularity) | null);
@@ -1043,6 +1094,10 @@ export type CreateMessageReqPayload = {
      * Page size is the number of chunks to fetch during RAG. If 0, then no search will be performed. If specified, this will override the N retrievals to include in the dataset configuration. Default is None.
      */
     page_size?: (number) | null;
+    /**
+     * Overrides what the way chunks are placed into the context window
+     */
+    rag_context?: (string) | null;
     /**
      * If true, stop words (specified in server/src/stop-words.txt in the git repo) will be removed. Queries that are entirely stop words will be preserved.
      */
@@ -1449,6 +1504,8 @@ export type DeprecatedSearchOverGroupsResponseBody = {
     total_chunk_pages: number;
 };
 
+export type Direction = 'asc' | 'desc';
+
 export type DistanceMetric = 'euclidean' | 'cosine' | 'manhattan' | 'dot';
 
 export type Document = {
@@ -1527,6 +1584,10 @@ export type EditMessageReqPayload = {
      * Page size is the number of chunks to fetch during RAG. If 0, then no search will be performed. If specified, this will override the N retrievals to include in the dataset configuration. Default is None.
      */
     page_size?: (number) | null;
+    /**
+     * Overrides what the way chunks are placed into the context window
+     */
+    rag_context?: (string) | null;
     /**
      * If true, stop words (specified in server/src/stop-words.txt in the git repo) will be removed. Queries that are entirely stop words will be preserved.
      */
@@ -1919,6 +1980,7 @@ export type EventsForTopicResponse = {
 };
 
 export type Experiment = {
+    area: string;
     control_name: string;
     control_split: number;
     created_at: string;
@@ -1931,10 +1993,19 @@ export type Experiment = {
 };
 
 export type ExperimentConfig = {
+    area: string;
     control_name: string;
     control_split: number;
     t1_name: string;
     t1_split: number;
+};
+
+/**
+ * Represents a SQL function or expression
+ */
+export type Expression = {
+    alias?: (string) | null;
+    expression: string;
 };
 
 export type ExtendedOrganizationUsageCount = {
@@ -2046,6 +2117,19 @@ export type FileWithChunkGroups = {
     updated_at: string;
 };
 
+/**
+ * Represents a query filter condition
+ */
+export type FilterCondition = {
+    and_filter?: Array<FilterCondition> | null;
+    column: string;
+    operator: FilterOperator;
+    or_filter?: Array<FilterCondition> | null;
+    value: FilterValue;
+};
+
+export type FilterOperator = '=' | '!=' | '<>' | '>' | '<' | '>=' | '<=' | 'like' | 'not like' | 'in' | 'not in' | 'is null' | 'is not null';
+
 export type FilterSidebarSection = {
     filterKey: string;
     filterType: string;
@@ -2054,6 +2138,8 @@ export type FilterSidebarSection = {
     selectionType: string;
     title: string;
 };
+
+export type FilterValue = string | number | boolean | Array<FilterValue>;
 
 export type FloatRange = {
     gt?: (number) | null;
@@ -2353,6 +2439,10 @@ export type GetToolFunctionParamsReqPayload = {
      * Model name to use for the completion. If not specified, this defaults to the dataset's model.
      */
     model?: (string) | null;
+    /**
+     * Temperature to use for the completion. If not specified, this defaults to the dataset's temperature.
+     */
+    temperature?: (number) | null;
     tool_function: ToolFunction;
     /**
      * Text of the user's message to the assistant which will be used to generate the parameters for the tool function.
@@ -2380,6 +2470,14 @@ export type GetTrackingChunksData = {
 };
 
 export type Granularity = 'minute' | 'second' | 'hour' | 'day' | 'month';
+
+/**
+ * Represents a GROUP BY clause
+ */
+export type GroupBy = {
+    columns: Array<(string)>;
+    having?: (string) | null;
+};
 
 export type GroupData = {
     /**
@@ -2585,6 +2683,20 @@ export type InvitationData = {
 };
 
 /**
+ * Represents a join condition between tables
+ */
+export type JoinClause = {
+    join_type?: ((JoinType) | null);
+    on_clause: string;
+    table: TableName;
+};
+
+/**
+ * Represents the type of join between tables
+ */
+export type JoinType = 'inner' | 'left' | 'right' | 'full' | 'cross' | 'anti';
+
+/**
  * LLM options to use for the completion. If not specified, this defaults to the dataset's LLM options.
  */
 export type LLMOptions = {
@@ -2782,6 +2894,11 @@ export type OpenGraphMetadata = {
     title?: (string) | null;
 };
 
+export type OrderBy = {
+    columns: Array<(string)>;
+    direction?: ((Direction) | null);
+};
+
 export type Organization = {
     /**
      * Timestamp of the creation of the dataset
@@ -2955,6 +3072,7 @@ export type PublicPageParameters = {
     headingPrefix?: (string) | null;
     heroPattern?: ((HeroPattern) | null);
     hideDrawnText?: (boolean) | null;
+    imageStarterText?: (string) | null;
     inline?: (boolean) | null;
     inlineHeader?: (string) | null;
     isTestMode?: (boolean) | null;
@@ -3496,6 +3614,10 @@ export type RegenerateMessageReqPayload = {
      * Page size is the number of chunks to fetch during RAG. If 0, then no search will be performed. If specified, this will override the N retrievals to include in the dataset configuration. Default is None.
      */
     page_size?: (number) | null;
+    /**
+     * Overrides what the way chunks are placed into the context window
+     */
+    rag_context?: (string) | null;
     /**
      * If true, stop words (specified in server/src/stop-words.txt in the git repo) will be removed. Queries that are entirely stop words will be preserved.
      */
@@ -4069,7 +4191,9 @@ export type SidebarFilters = {
 };
 
 export type SingleProductOptions = {
+    enabled?: (boolean) | null;
     groupTrackingId?: (string) | null;
+    pdpPrompt?: (string) | null;
     productDescriptionHtml?: (string) | null;
     productName?: (string) | null;
     productPrimaryImageUrl?: (string) | null;
@@ -4264,6 +4388,39 @@ export type StripeUsageBasedSubscription = {
     usage_based_plan_id: string;
 };
 
+/**
+ * Represents a complete ClickHouse query with parameters
+ */
+export type SubQuery = {
+    /**
+     * Simple columns to select
+     */
+    columns: Array<Column>;
+    /**
+     * Complex expressions to select
+     */
+    expressions?: Array<Expression> | null;
+    /**
+     * WHERE clause conditions
+     */
+    filter_conditions?: Array<FilterCondition> | null;
+    group_by?: ((GroupBy) | null);
+    /**
+     * Tables to join with
+     */
+    joins?: Array<JoinClause> | null;
+    /**
+     * LIMIT clause
+     */
+    limit?: (number) | null;
+    /**
+     * OFFSET clause
+     */
+    offset?: (number) | null;
+    order_by?: ((OrderBy) | null);
+    table: TableName;
+};
+
 export type SuggestType = 'question' | 'keyword' | 'semantic';
 
 export type SuggestedQueriesReqPayload = {
@@ -4287,6 +4444,10 @@ export type SuggestedQueriesReqPayload = {
 
 export type SuggestedQueriesResponse = {
     queries: Array<(string)>;
+};
+
+export type TableName = 'search_queries' | 'rag_queries' | 'recommendations' | 'events' | 'cluster_topics' | 'search_cluster_memberships' | 'topics' | 'experiments' | 'experiment_user_assignments' | {
+    Custom: string;
 };
 
 export type TagProp = {
@@ -4510,9 +4671,13 @@ export type TypoRange = {
 
 export type UpdateAllOrgDatasetConfigsReqPayload = {
     /**
+     * The configuration to provide a filter on what datasets to update.
+     */
+    match_configuration?: unknown;
+    /**
      * The new configuration for all datasets in the organization. Only the specified keys in the configuration object will be changed per dataset such that you can preserve dataset unique values.
      */
-    dataset_config: unknown;
+    to_configuration: unknown;
 };
 
 export type UpdateChunkByTrackingIdData = {
@@ -4793,6 +4958,10 @@ export type UploadFileReqPayload = {
      * Time stamp should be an ISO 8601 combined date and time without timezone. Time_stamp is used for time window filtering and recency-biasing search results. Will be passed down to the file's chunks.
      */
     time_stamp?: (string) | null;
+    /**
+     * Optional webhook URL to receive notifications for each page processed.
+     */
+    webhook_url?: (string) | null;
 };
 
 export type UploadFileResponseBody = {
@@ -4847,6 +5016,19 @@ export type WorkerEvent = {
     id: string;
     organization_id?: (string) | null;
 };
+
+export type GetAnalyticsData = {
+    /**
+     * JSON request payload to filter the graph
+     */
+    requestBody: AnalyticsQuery;
+    /**
+     * The dataset id or tracking_id to use for the request. We assume you intend to use an id if the value is a valid uuid.
+     */
+    trDataset: string;
+};
+
+export type GetAnalyticsResponse = (unknown);
 
 export type SendCtrDataData = {
     /**
@@ -6494,6 +6676,17 @@ export type DeleteUserApiKeyResponse = (void);
 export type GetMetricsResponse = (string);
 
 export type $OpenApiTs = {
+    '/api/analytics': {
+        post: {
+            req: GetAnalyticsData;
+            res: {
+                /**
+                 * The analytics for the dataset
+                 */
+                200: unknown;
+            };
+        };
+    };
     '/api/analytics/ctr': {
         put: {
             req: SendCtrDataData;

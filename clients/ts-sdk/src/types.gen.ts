@@ -1491,6 +1491,11 @@ export type DateRange = {
     lte?: (string) | null;
 };
 
+export type DefaultSearchQuery = {
+    imageUrl?: (string) | null;
+    query?: (string) | null;
+};
+
 export type DeleteTopicData = {
     /**
      * The id of the topic to target.
@@ -3058,11 +3063,11 @@ export type PublicPageParameters = {
     currencyPosition?: (string) | null;
     datasetId?: (string) | null;
     debounceMs?: (number) | null;
-    defaultAiQuestions?: Array<(string)> | null;
+    defaultAiQuestions?: Array<DefaultSearchQuery> | null;
     defaultCurrency?: (string) | null;
     defaultImageQuestion?: (string) | null;
     defaultSearchMode?: (string) | null;
-    defaultSearchQueries?: Array<(string)> | null;
+    defaultSearchQueries?: Array<DefaultSearchQuery> | null;
     defaultSearchQuery?: (string) | null;
     floatingButtonPosition?: (string) | null;
     floatingButtonVersion?: (string) | null;
@@ -3088,6 +3093,7 @@ export type PublicPageParameters = {
     searchBar?: (boolean) | null;
     searchOptions?: ((PublicPageSearchOptions) | null);
     searchPageProps?: ((SearchPageProps) | null);
+    searchToolCallOptions?: ((SearchToolCallOptions) | null);
     showFloatingButton?: (boolean) | null;
     showFloatingInput?: (boolean) | null;
     showFloatingSearchIcon?: (boolean) | null;
@@ -4032,6 +4038,12 @@ export type SearchRevenueResponse = {
 
 export type SearchSortBy = 'created_at' | 'latency' | 'top_score';
 
+export type SearchToolCallOptions = {
+    noSearchRagContext?: (string) | null;
+    toolDescription?: (string) | null;
+    userMessageTextPrefix?: (string) | null;
+};
+
 export type SearchType = 'search' | 'autocomplete' | 'search_over_groups' | 'search_within_groups';
 
 export type SearchTypeCount = {
@@ -4197,7 +4209,7 @@ export type SingleProductOptions = {
     productDescriptionHtml?: (string) | null;
     productName?: (string) | null;
     productPrimaryImageUrl?: (string) | null;
-    productQuestions?: Array<(string)> | null;
+    productQuestions?: Array<DefaultSearchQuery> | null;
     productTrackingId?: (string) | null;
     recSearchQuery?: (string) | null;
 };
@@ -6128,6 +6140,19 @@ export type AbTestData = {
 
 export type AbTestResponse = (UserTreatmentResponse);
 
+export type GetExperimentData = {
+    /**
+     * The experiment id to use for the request
+     */
+    experimentId: string;
+    /**
+     * The dataset id to use for the request
+     */
+    trDataset: string;
+};
+
+export type GetExperimentResponse = (Experiment);
+
 export type DeleteExperimentData = {
     experimentId: string;
     /**
@@ -7921,6 +7946,19 @@ export type $OpenApiTs = {
         };
     };
     '/api/experiment/{experiment_id}': {
+        get: {
+            req: GetExperimentData;
+            res: {
+                /**
+                 * Experiment retrieved successfully
+                 */
+                200: Experiment;
+                /**
+                 * Service error relating to getting the experiment
+                 */
+                400: ErrorResponseBody;
+            };
+        };
         delete: {
             req: DeleteExperimentData;
             res: {

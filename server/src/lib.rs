@@ -291,6 +291,7 @@ impl Modify for SecurityAddon {
         handlers::experiment_handler::update_experiment,
         handlers::experiment_handler::delete_experiment,
         handlers::experiment_handler::ab_test,
+        handlers::experiment_handler::get_experiment,
     ),
     components(
         schemas(
@@ -470,11 +471,13 @@ impl Modify for SecurityAddon {
             handlers::page_handler::PublicPageTag,
             handlers::page_handler::RelevanceToolCallOptions,
             handlers::page_handler::PriceToolCallOptions,
+            handlers::page_handler::SearchToolCallOptions,
             handlers::page_handler::PublicPageTheme,
             handlers::page_handler::PublicPageParameters,
             handlers::page_handler::PublicPageTabMessage,
             handlers::page_handler::SearchPageProps,
             handlers::page_handler::FilterSidebarSection,
+            handlers::page_handler::DefaultSearchQuery,
             handlers::page_handler::TagProp,
             handlers::page_handler::RangeSliderConfig,
             handlers::page_handler::SidebarFilters,
@@ -1570,6 +1573,7 @@ pub fn main() -> std::io::Result<()> {
                                 )
                                 .service(
                                     web::resource("/{experiment_id}")
+                                        .route(web::get().to(handlers::experiment_handler::get_experiment))
                                         .route(web::delete().to(handlers::experiment_handler::delete_experiment))
                                 )
                         )

@@ -31,6 +31,7 @@ import {
   PublicPageTabMessage,
   RelevanceToolCallOptions,
   SearchOverGroupsResponseBody,
+  SearchToolCallOptions,
 } from "trieve-ts-sdk";
 import FilterSidebarBuilder from "../../components/FilterSidebarBuilder";
 import { DatasetContext } from "../../contexts/DatasetContext";
@@ -75,6 +76,12 @@ export const defaultRelevanceToolCallOptions: RelevanceToolCallOptions = {
     "Somewhat relevant and a decent or okay fit for the given query taking all details of both the query and the product into account",
   lowDescription:
     "Not relevant and not a good fit for the given query taking all details of both the query and the product into account",
+};
+
+export const defaultSearchToolCallOptions: SearchToolCallOptions = {
+  userMessageTextPrefix: "Here is the user query:",
+  toolDescription:
+    "Call this tool anytime it seems like we need to skip the search step. This tool tells our system that the user is asking about what they were previously shown.",
 };
 
 export const defaultPriceToolCallOptions: PriceToolCallOptions = {
@@ -652,9 +659,25 @@ const PublicPageControls = () => {
               placeholder={`What is ${
                 extraParams["brandName"] || "Trieve"
               }?...`}
-              value={extraParams.defaultSearchQueries || []}
+              value={
+                extraParams.defaultSearchQueries?.map((q) =>
+                  q.query ? q.query + "," + (q.imageUrl ?? "") : q.query ?? "",
+                ) || []
+              }
               onChange={(e) => {
-                setExtraParams("defaultSearchQueries", e);
+                setExtraParams(
+                  "defaultSearchQueries",
+                  e.map((q) =>
+                    q.includes(",")
+                      ? URL.canParse(q.split(",")[1])
+                        ? {
+                            query: q.split(",")[0],
+                            imageUrl: q.split(",")[1],
+                          }
+                        : { query: q }
+                      : { query: q },
+                  ),
+                );
               }}
               addLabel="Add Example Search"
               addClass="text-sm"
@@ -675,9 +698,20 @@ const PublicPageControls = () => {
               placeholder={`What is ${
                 extraParams["brandName"] || "Trieve"
               }?...`}
-              value={extraParams.defaultAiQuestions || []}
+              value={
+                extraParams.defaultAiQuestions?.map((q) =>
+                  q.query ? q.query + "," + (q.imageUrl ?? "") : q.query ?? "",
+                ) || []
+              }
               onChange={(e) => {
-                setExtraParams("defaultAiQuestions", e);
+                setExtraParams(
+                  "defaultAiQuestions",
+                  e.map((q) =>
+                    q.includes(",")
+                      ? { query: q.split(",")[0], imageUrl: q.split(",")[1] }
+                      : { query: q },
+                  ),
+                );
               }}
               addLabel="Add Example Question"
               addClass="text-sm"
@@ -1662,6 +1696,76 @@ const PublicPageControls = () => {
           </div>
         </details>
 
+        <details class="my-4">
+          <summary class="cursor-pointer text-sm font-medium">
+            Search Tool Options
+          </summary>
+          <div class="mt-4 space-y-4">
+            <div class="grid grid-cols-2 gap-4">
+              <div class="grow">
+                <div class="flex items-center gap-1">
+                  <label class="block" for="">
+                    Search Tool Description
+                  </label>
+                  <Tooltip
+                    tooltipText="Description of the search tool provided to the model."
+                    body={
+                      <FaRegularCircleQuestion class="h-3 w-3 text-black" />
+                    }
+                  />
+                </div>
+                <textarea
+                  value={
+                    extraParams.searchToolCallOptions?.toolDescription ||
+                    defaultPriceToolCallOptions.toolDescription
+                  }
+                  onInput={(e) =>
+                    setExtraParams(
+                      "searchToolCallOptions",
+                      "toolDescription",
+                      e.currentTarget.value,
+                    )
+                  }
+                  rows="4"
+                  name="messageToQueryPrompt"
+                  id="messageToQueryPrompt"
+                  class="block w-full rounded-md border-[0.5px] border-neutral-300 px-3 py-1.5 shadow-sm placeholder:text-neutral-400 focus:outline-magenta-500 sm:text-sm sm:leading-6"
+                />
+              </div>
+              <div class="grow">
+                <div class="flex items-center gap-1">
+                  <label class="block" for="">
+                    Search Prompt
+                  </label>
+                  <Tooltip
+                    tooltipText="Prompt to the model to use the search tool."
+                    body={
+                      <FaRegularCircleQuestion class="h-3 w-3 text-black" />
+                    }
+                  />
+                </div>
+                <textarea
+                  value={
+                    (extraParams.searchToolCallOptions?.userMessageTextPrefix ||
+                      defaultSearchToolCallOptions.userMessageTextPrefix) as string
+                  }
+                  onInput={(e) =>
+                    setExtraParams(
+                      "searchToolCallOptions",
+                      "userMessageTextPrefix",
+                      e.currentTarget.value,
+                    )
+                  }
+                  rows="4"
+                  name="messageToQueryPrompt"
+                  id="messageToQueryPrompt"
+                  class="block w-full rounded-md border-[0.5px] border-neutral-300 px-3 py-1.5 shadow-sm placeholder:text-neutral-400 focus:outline-magenta-500 sm:text-sm sm:leading-6"
+                />
+              </div>
+            </div>
+          </div>
+        </details>
+
         <div class="space-x-1.5 pt-8">
           <button
             class="inline-flex justify-center rounded-md bg-magenta-500 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-magenta-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-magenta-900 disabled:opacity-40"
@@ -1841,10 +1945,19 @@ export const SingleProductOptions = () => {
             </div>
             <MultiStringInput
               placeholder="What does it do?..."
-              value={extraParams.singleProductOptions?.productQuestions || []}
+              value={
+                extraParams.singleProductOptions?.productQuestions?.map((q) =>
+                  q.query ? q.query + "," + (q.imageUrl ?? "") : q.query ?? "",
+                ) || []
+              }
               onChange={(e) => {
                 setExtraParams("singleProductOptions", {
-                  productQuestions: e,
+                  ...extraParams.singleProductOptions,
+                  productQuestions: e.map((q) =>
+                    q.includes(",")
+                      ? { query: q.split(",")[0], imageUrl: q.split(",")[1] }
+                      : { query: q },
+                  ),
                 });
               }}
               addLabel="Add Product Question"

@@ -16,6 +16,7 @@ import {
   RelevanceToolCallOptions,
   PriceToolCallOptions,
   type Dataset,
+  SearchToolCallOptions,
 } from "trieve-ts-sdk";
 import { createWebPixel, isWebPixelInstalled } from "app/queries/webPixel";
 import { getAppMetafields, setAppMetafields } from "app/queries/metafield";
@@ -27,6 +28,7 @@ import {
 } from "app/components/settings/PresetQuestions";
 import { FilterSettings } from "app/components/settings/FilterSettings";
 import { IntegrationsSettings } from "app/components/settings/Integrations";
+import { PolicySettings } from "app/components/settings/PolicySettings";
 
 export const loader = async ({
   request,
@@ -37,6 +39,7 @@ export const loader = async ({
   pdpPrompt: string;
   presetQuestions: PresetQuestion[];
   relevanceToolCallOptions: RelevanceToolCallOptions | null;
+  searchToolCallOptions: SearchToolCallOptions | null;
   priceToolCallOptions: PriceToolCallOptions | null;
 }> => {
   const { session } = await authenticate.admin(request);
@@ -83,6 +86,11 @@ export const loader = async ({
       fetcher,
       "relevance_tool_call_options",
     );
+  const searchToolCallOptions =
+    await getAppMetafields<RelevanceToolCallOptions>(
+      fetcher,
+      "search_tool_call_options",
+    );
   const priceToolCallOptions = await getAppMetafields<PriceToolCallOptions>(
     fetcher,
     "price_tool_call_options",
@@ -95,6 +103,7 @@ export const loader = async ({
     pdpPrompt,
     presetQuestions,
     relevanceToolCallOptions,
+    searchToolCallOptions,
     priceToolCallOptions,
   };
 };
@@ -104,7 +113,9 @@ type SettingsSaveType =
   | "dataset"
   | "revenue_tracking"
   | "preset-questions"
-  | "tool_call_options";
+  | "tool_call_options"
+  | "policy"
+  | "delete_policy";
 
 export const action = async ({ request }: ActionFunctionArgs) => {
   const { session } = await authenticate.admin(request);
@@ -201,6 +212,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
         "relevance_tool_call_options",
       );
       const priceToolCallOptions = formData.get("price_tool_call_options");
+      const searchToolCallOptions = formData.get("search_tool_call_options");
       await setAppMetafields(fetcher, [
         {
           key: "relevance_tool_call_options",
@@ -212,7 +224,45 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           value: priceToolCallOptions as string,
           type: "json",
         },
+        {
+          key: "search_tool_call_options",
+          value: searchToolCallOptions as string,
+          type: "json",
+        },
       ]);
+      return { success: true };
+    }
+    case "policy": {
+      const policyContent = formData.get("policy");
+      const policyId = formData.get("policy_id");
+
+      await trieve.createChunkGroup({
+        dataset_id: trieve.datasetId,
+        group_tracking_id: "policy",
+      });
+
+      await trieve.createChunk({
+        // Add this just to rubber stamp
+        metadata: {
+          status: "ACTIVE",
+          variant_inventory: 20,
+        },
+        chunk_html: policyContent as string,
+        tracking_id: policyId as string,
+        tag_set: ["policy"],
+        group_tracking_ids: ["policy"],
+        upsert_by_tracking_id: true,
+      });
+
+      return { success: true };
+    }
+    case "delete_policy": {
+      const policyId = formData.get("policy_id");
+
+      await trieve.deleteChunkByTrackingId({
+        trackingId: policyId as string,
+      });
+
       return { success: true };
     }
     default: {
@@ -231,6 +281,7 @@ export default function Dataset() {
     pdpPrompt,
     presetQuestions,
     relevanceToolCallOptions,
+    searchToolCallOptions,
     priceToolCallOptions,
   } = useLoaderData<typeof loader>();
   const [selectedTab, setSelectedTab] = useState(0);
@@ -246,6 +297,12 @@ export default function Dataset() {
       content: "Preset Questions",
       accessibilityLabel: "Preset Questions",
       panelID: "preset-questions-content",
+    },
+    {
+      id: "extra-information",
+      content: "Policies",
+      accessibilityLabel: "Policies",
+      panelID: "update-policies-settings-content",
     },
     {
       id: "filter-settings",
@@ -289,12 +346,14 @@ export default function Dataset() {
         shopDataset={shopDataset as Dataset}
         existingPdpPrompt={pdpPrompt}
         existingRelevanceToolCallOptions={relevanceToolCallOptions}
+        existingSearchToolCallOptions={searchToolCallOptions}
         existingPriceToolCallOptions={priceToolCallOptions}
       />
     ),
     "preset-questions": <PresetQuestions initialQuestions={presetQuestions} />,
     "filter-settings": <FilterSettings />,
     "integrations-settings": <IntegrationsSettings />,
+    "extra-information": <PolicySettings shopDataset={shopDataset as Dataset} />,
   };
 
   return (

@@ -1,14 +1,15 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { cn } from "../../utils/styles";
-import { useModalState } from "../../utils/hooks/modal-context";
-import { SuggestedQueriesResponse } from "trieve-ts-sdk";
+import { useModalState, isDefaultSearchQuery } from "../../utils/hooks/modal-context";
+import { DefaultSearchQuery } from "trieve-ts-sdk";
 import { getSuggestedQueries } from "../../utils/trieve";
 
 export const SuggestedQueries = () => {
-  const { props, query, setQuery, imageUrl, trieveSDK } = useModalState();
+  const { props, query, setQuery, imageUrl, setImageUrl, trieveSDK } =
+    useModalState();
   const [isLoading, setIsLoading] = useState(false);
   const [suggestedQueries, setSuggestedQueries] = useState<
-    SuggestedQueriesResponse["queries"]
+    (DefaultSearchQuery | string)[]
   >([]);
 
   const getQueries = useCallback(
@@ -27,11 +28,25 @@ export const SuggestedQueries = () => {
     [query],
   );
 
+  const handleSendSuggestedQuery = (q: DefaultSearchQuery | string) => {
+    if (isDefaultSearchQuery(q)) {
+      setQuery(q.query ?? "");
+
+      if (q.imageUrl) {
+        setImageUrl(q.imageUrl);
+      }
+    } else {
+      setQuery(q);
+    }
+  };
+
   useEffect(() => {
     const defaultQueries =
-      props.defaultSearchQueries?.filter((q) => q !== "") ?? [];
+      props.defaultSearchQueries && props.defaultSearchQueries.length > 0 && isDefaultSearchQuery(props.defaultSearchQueries[0])
+        ? props.defaultSearchQueries
+        : props.defaultSearchQueries?.filter((q) => q !== "") ?? [];
 
-    if (defaultQueries.length) {
+    if (props.defaultSearchQueries?.length) {
       setSuggestedQueries(defaultQueries);
       return;
     }
@@ -64,15 +79,15 @@ export const SuggestedQueries = () => {
         <div className="suggested-query loading">Loading...</div>
       ) : (
         suggestedQueries.map((q) => {
-          q = q.replace(/^-|\*$/g, "");
-          q = q.trim();
+          let query = isDefaultSearchQuery(q)  ? q.query?.replace(/^-|\*$/g, "") : q.replace(/^-|\*$/g, "");
+          query = query?.trim();
           return (
             <button
-              onClick={() => setQuery(q)}
-              key={q}
+              onClick={() => handleSendSuggestedQuery(q)}
+              key={query}
               className={`suggested-query${isLoading ? " loading" : ""}`}
             >
-              {q}
+              {query}
             </button>
           );
         })

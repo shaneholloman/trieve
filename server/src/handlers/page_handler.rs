@@ -156,7 +156,7 @@ pub struct SingleProductOptions {
     product_description_html: Option<String>,
     product_primary_image_url: Option<String>,
     rec_search_query: Option<String>,
-    product_questions: Option<Vec<String>>,
+    product_questions: Option<Vec<DefaultSearchQuery>>,
     pdp_prompt: Option<String>,
 }
 
@@ -197,6 +197,15 @@ pub struct PriceToolCallOptions {
     pub min_price_description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_price_description: Option<String>,
+}
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchToolCallOptions {
+    pub tool_description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_message_text_prefix: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub no_search_rag_context: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema, Default)]
@@ -249,6 +258,15 @@ pub struct SearchPageProps {
 
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema, Default)]
 #[serde(rename_all = "camelCase")]
+pub struct DefaultSearchQuery {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct PublicPageParameters {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dataset_id: Option<uuid::Uuid>,
@@ -266,6 +284,8 @@ pub struct PublicPageParameters {
     pub relevance_tool_call_options: Option<RelevanceToolCallOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub price_tool_call_options: Option<PriceToolCallOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub search_tool_call_options: Option<SearchToolCallOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub suggested_queries: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -295,9 +315,9 @@ pub struct PublicPageParameters {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub placeholder: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_search_queries: Option<Vec<String>>,
+    pub default_search_queries: Option<Vec<DefaultSearchQuery>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub default_ai_questions: Option<Vec<String>>,
+    pub default_ai_questions: Option<Vec<DefaultSearchQuery>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_search_mode: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

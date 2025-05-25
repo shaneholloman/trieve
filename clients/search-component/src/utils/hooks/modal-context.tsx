@@ -12,6 +12,7 @@ import {
   ChunkGroup,
   SearchChunksReqPayload,
   TrieveSDK,
+  DefaultSearchQuery,
 } from "trieve-ts-sdk";
 import {
   groupSearchWithPagefind,
@@ -83,6 +84,17 @@ export interface RelevanceToolCallOptions {
   lowDescription?: string;
 }
 
+export interface SearchToolCallOptions {
+  userMessageTextPrefix?: string;
+  toolDescription: string;
+}
+
+export const defaultSearchToolCallOptions: SearchToolCallOptions = {
+  userMessageTextPrefix: "Here is the user query:",
+  toolDescription:
+    "Call this tool anytime it seems like we need to skip the search step. This tool tells our system that the user is asking about what they were previously shown.",
+};
+
 export const defaultPriceToolCallOptions: PriceToolCallOptions = {
   toolDescription:
     "Only call this function if the query includes details about a price. Decide on which price filters to apply to the available catalog being used within the knowledge base to respond. If the question is slightly like a product name, respond with no filters (all false).",
@@ -114,7 +126,6 @@ export interface SearchPageProps {
   filterSidebarProps?: FilterSidebarProps;
   display?: boolean;
 }
-
 export interface AiQuestion {
   questionText: string;
   promptForAI?: string;
@@ -125,10 +136,17 @@ export interface AiQuestion {
 }
 
 export function isAiQuestion(
-  question: string | AiQuestion,
+  question: string | AiQuestion | DefaultSearchQuery,
 ): question is AiQuestion {
   return typeof question === "object" && "questionText" in question;
 }
+
+export function isDefaultSearchQuery(
+  question: string | AiQuestion | DefaultSearchQuery,
+): question is DefaultSearchQuery {
+  return typeof question === "object" && "query" in question;
+}
+
 
 export type ModalProps = {
   datasetId: string;
@@ -152,8 +170,8 @@ export type ModalProps = {
   allowRefreshSuggestedQueries?: boolean;
   followupQuestions?: boolean;
   numberOfSuggestions?: number;
-  defaultSearchQueries?: string[];
-  defaultAiQuestions?: string[] | AiQuestion[];
+  defaultSearchQueries?: DefaultSearchQuery[] | string[];
+  defaultAiQuestions?: AiQuestion[] | DefaultSearchQuery[] | string[];
   brandLogoImgSrcUrl?: string;
   brandName?: string;
   problemLink?: string;
@@ -163,6 +181,7 @@ export type ModalProps = {
   tags?: TagProp[];
   relevanceToolCallOptions?: RelevanceToolCallOptions;
   priceToolCallOptions?: PriceToolCallOptions;
+  searchToolCallOptions?: SearchToolCallOptions;
   defaultSearchMode?: SearchModes;
   usePagefind?: boolean;
   type?: ModalTypes;
@@ -245,6 +264,7 @@ const defaultProps = {
     },
   } as searchOptions,
   chatFilters: undefined,
+  searchToolCallOptions: defaultSearchToolCallOptions,
   analytics: true,
   chat: true,
   suggestedQueries: true,
@@ -698,6 +718,7 @@ const ModalProvider = ({
                 component_props: props,
                 ab_treatment: abTreatment,
               },
+              is_conversion: false,
             },
             abortController.signal,
           );
@@ -729,6 +750,7 @@ const ModalProvider = ({
                 component_props: props,
                 ab_treatment: abTreatment,
               },
+              is_conversion: false,
             },
             abortController.signal,
           );

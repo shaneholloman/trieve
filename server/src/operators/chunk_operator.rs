@@ -15,6 +15,7 @@ use crate::{
     errors::ServiceError,
 };
 use actix_web::web;
+use broccoli_queue::queue::BroccoliQueue;
 use chrono::NaiveDateTime;
 use clickhouse::Row;
 use dateparser::DateTimeUtc;
@@ -620,7 +621,6 @@ pub async fn bulk_delete_chunks_query(
 
 /// Only inserts, does not try to upsert data
 #[allow(clippy::type_complexity)]
-
 pub async fn bulk_insert_chunk_metadata_query(
     mut insertion_data: Vec<ChunkData>,
     dataset_uuid: uuid::Uuid,
@@ -777,7 +777,7 @@ pub async fn bulk_insert_chunk_metadata_query(
             if chunk_data.fulltext_boost.is_none() && chunk_data.semantic_boost.is_none() {
                 return None;
             }
-            return Some(ChunkBoost {
+            Some(ChunkBoost {
                 chunk_id: chunk_data.chunk_metadata.id,
                 fulltext_boost_phrase: chunk_data
                     .fulltext_boost
@@ -795,7 +795,7 @@ pub async fn bulk_insert_chunk_metadata_query(
                     .semantic_boost
                     .as_ref()
                     .map(|boost| boost.distance_factor as f64),
-            });
+            })
         })
         .unique_by(|boost| boost.chunk_id)
         .collect::<Vec<ChunkBoost>>();
@@ -1184,7 +1184,6 @@ pub async fn get_dataset_tags_id_from_names(
 }
 
 /// Bulk revert, assumes upsert chunk_ids were not upserted, only enterted
-
 pub async fn bulk_revert_insert_chunk_metadata_query(
     chunk_ids: Vec<uuid::Uuid>,
     pool: web::Data<Pool>,
@@ -2208,7 +2207,6 @@ pub fn get_highlights_with_exact_match(
 }
 
 #[allow(clippy::too_many_arguments)]
-
 pub fn get_highlights(
     chunk_html: Option<String>,
     query: String,
@@ -2954,4 +2952,31 @@ pub async fn get_last_processed_from_clickhouse(
 pub fn get_storage_mb_from_chunk_count(chunk_count: i32) -> i64 {
     // dense        sparse    payload
     (((1536 * 4) + (256 * 4) + 4096) * (chunk_count as i64)) / (1_000_000)
+}
+
+pub async fn get_chunk_queue_length(
+    dataset_id: uuid::Uuid,
+    broccoli_queue: &BroccoliQueue,
+) -> Result<i64, ServiceError> {
+    let openai_ingestion_queue_status = broccoli_queue
+        .queue_status("openai_ingestion".to_string(), Some(dataset_id.to_string()))
+        .await
+        .map_err(|e| ServiceError::InternalServerError(e.to_string()))?;
+
+    let regular_ingestion_queue_status = broccoli_queue
+        .queue_status("ingestion".to_string(), Some(dataset_id.to_string()))
+        .await
+        .map_err(|e| ServiceError::InternalServerError(e.to_string()))?;
+
+    let premium_ingestion_queue_status = broccoli_queue
+        .queue_status(
+            "premium_ingestion".to_string(),
+            Some(dataset_id.to_string()),
+        )
+        .await
+        .map_err(|e| ServiceError::InternalServerError(e.to_string()))?;
+
+    Ok(openai_ingestion_queue_status.size as i64
+        + regular_ingestion_queue_status.size as i64
+        + premium_ingestion_queue_status.size as i64)
 }

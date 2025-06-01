@@ -1087,7 +1087,7 @@ export type CreateMessageReqPayload = {
      */
     no_result_message?: (string) | null;
     /**
-     * Only include docs used in the completion. If not specified, this defaults to false.
+     * Only include docs used is a boolean that indicates whether or not to only include the docs that were used in the completion. If true, the completion will only include the docs that were used in the completion. If false, the completion will include all of the docs.
      */
     only_include_docs_used?: (boolean) | null;
     /**
@@ -1117,6 +1117,10 @@ export type CreateMessageReqPayload = {
      */
     topic_id: string;
     typo_options?: ((TypoOptions) | null);
+    /**
+     * If true, the search will be conducted using llm tool calling. If not specified, this defaults to false.
+     */
+    use_agentic_search?: (boolean) | null;
     /**
      * If use_group_search is set to true, the search will be conducted using the `search_over_groups` api. If not specified, this defaults to false.
      */
@@ -1450,6 +1454,7 @@ export type DatasetConfigurationDTO = {
      * The temperature to use
      */
     TEMPERATURE?: (number) | null;
+    TOOL_CONFIGURATION?: ((ToolConfiguration) | null);
     /**
      * Whether to use the message to query prompt
      */
@@ -1468,6 +1473,17 @@ export type DatasetDTO = {
 export type DatasetFilePathParams = {
     dataset_id: string;
     page: number;
+};
+
+export type DatasetQueueLengthsResponse = {
+    /**
+     * Number of chunks in the queue for the dataset
+     */
+    chunk_queue_length: number;
+    /**
+     * Number of files in the queue for the dataset
+     */
+    file_queue_length: number;
 };
 
 export type DatasetUsageCount = {
@@ -1495,6 +1511,8 @@ export type DefaultSearchQuery = {
     imageUrl?: (string) | null;
     query?: (string) | null;
 };
+
+export type DefaultSearchQueryType = string | DefaultSearchQuery;
 
 export type DeleteTopicData = {
     /**
@@ -1582,7 +1600,7 @@ export type EditMessageReqPayload = {
      */
     no_result_message?: (string) | null;
     /**
-     * Only include docs used in the completion. If not specified, this defaults to false.
+     * Only include docs used is a boolean that indicates whether or not to only include the docs that were used in the completion. If true, the completion will only include the docs that were used in the completion. If false, the completion will include all of the docs.
      */
     only_include_docs_used?: (boolean) | null;
     /**
@@ -1612,6 +1630,10 @@ export type EditMessageReqPayload = {
      */
     topic_id: string;
     typo_options?: ((TypoOptions) | null);
+    /**
+     * If true, the search will be conducted using llm tool calling. If not specified, this defaults to false.
+     */
+    use_agentic_search?: (boolean) | null;
     use_group_search?: (boolean) | null;
     /**
      * If true, quoted and - prefixed words will be parsed from the queries and used as required and negated words respectively. Default is false.
@@ -2006,12 +2028,32 @@ export type ExperimentConfig = {
 };
 
 /**
- * Represents a SQL function or expression
+ * Represents a SQL expression with optional alias
  */
 export type Expression = {
     alias?: (string) | null;
-    expression: string;
+    expression: ExpressionType;
 };
+
+/**
+ * Structured expression type
+ */
+export type ExpressionType = {
+    name: string;
+    type: 'column';
+} | {
+    type: 'literal';
+    value: FilterValue;
+} | {
+    args: Array<ExpressionType>;
+    name: string;
+    type: 'function';
+} | {
+    sql: string;
+    type: 'raw';
+};
+
+export type type4 = 'column';
 
 export type ExtendedOrganizationUsageCount = {
     bytes_ingested: number;
@@ -2181,6 +2223,17 @@ export type FullTextBoost = {
     phrase: string;
 };
 
+export type GenerateMessageCompletionsReqPayload = {
+    /**
+     * The system message to use for the message completion.
+     */
+    system_message: string;
+    /**
+     * The user message to use for the message completion.
+     */
+    user_message: string;
+};
+
 export type GenerateOffChunksReqPayload = {
     /**
      * Audio input to be used in the chat. This will be used to generate the audio tokens for the model. The default is None.
@@ -2212,6 +2265,10 @@ export type GenerateOffChunksReqPayload = {
      * Metadata is any metadata you want to associate w/ the event that is created from this request
      */
     metadata?: unknown;
+    /**
+     * Model to use for the completion. If not specified, the default model configured for the dataset will be used.
+     */
+    model?: (string) | null;
     /**
      * Presence penalty is a number between -2.0 and 2.0. Positive values penalize new tokens based on whether they appear in the text so far, increasing the model's likelihood to talk about new topics. Default is 0.7.
      */
@@ -2481,7 +2538,7 @@ export type Granularity = 'minute' | 'second' | 'hour' | 'day' | 'month';
  */
 export type GroupBy = {
     columns: Array<(string)>;
-    having?: (string) | null;
+    having?: ((HavingCondition) | null);
 };
 
 export type GroupData = {
@@ -2537,6 +2594,25 @@ export type HasChunkIDCondition = {
      */
     tracking_ids?: Array<(string)> | null;
 };
+
+/**
+ * Structured HAVING condition
+ */
+export type HavingCondition = {
+    column: string;
+    function: AggregationType;
+    operator: FilterOperator;
+    type: 'aggregate';
+    value: FilterValue;
+} | {
+    conditions: Array<HavingCondition>;
+    type: 'and';
+} | {
+    conditions: Array<HavingCondition>;
+    type: 'or';
+};
+
+export type type5 = 'aggregate';
 
 export type HeadQueries = {
     count: number;
@@ -2688,13 +2764,27 @@ export type InvitationData = {
 };
 
 /**
- * Represents a join condition between tables
+ * Represents a join between tables
  */
 export type JoinClause = {
+    condition: JoinCondition;
     join_type?: ((JoinType) | null);
-    on_clause: string;
     table: TableName;
 };
+
+/**
+ * Structured join condition instead of raw SQL
+ */
+export type JoinCondition = {
+    left_column: string;
+    right_column: string;
+    type: 'column_equals';
+} | {
+    columns: Array<(string)>;
+    type: 'using';
+};
+
+export type type6 = 'column_equals';
 
 /**
  * Represents the type of join between tables
@@ -2886,6 +2976,11 @@ export type MultiQuery = {
 
 export type NewChunkMetadataTypes = SlimChunkMetadataWithArrayTagSet | ChunkMetadata | ContentChunkMetadata;
 
+export type NotFilterToolCallOptions = {
+    toolDescription?: (string) | null;
+    userMessageTextPrefix?: (string) | null;
+};
+
 /**
  * Controls the Optical Character Recognition (OCR) strategy.
  * - `All`: Processes all pages with OCR. (Latency penalty: ~0.5 seconds per page)
@@ -3063,11 +3158,11 @@ export type PublicPageParameters = {
     currencyPosition?: (string) | null;
     datasetId?: (string) | null;
     debounceMs?: (number) | null;
-    defaultAiQuestions?: Array<DefaultSearchQuery> | null;
+    defaultAiQuestions?: Array<DefaultSearchQueryType> | null;
     defaultCurrency?: (string) | null;
     defaultImageQuestion?: (string) | null;
     defaultSearchMode?: (string) | null;
-    defaultSearchQueries?: Array<DefaultSearchQuery> | null;
+    defaultSearchQueries?: Array<DefaultSearchQueryType> | null;
     defaultSearchQuery?: (string) | null;
     floatingButtonPosition?: (string) | null;
     floatingButtonVersion?: (string) | null;
@@ -3082,6 +3177,7 @@ export type PublicPageParameters = {
     inlineHeader?: (string) | null;
     isTestMode?: (boolean) | null;
     navLogoImgSrcUrl?: (string) | null;
+    notFilterToolCallOptions?: ((NotFilterToolCallOptions) | null);
     numberOfSuggestions?: (number) | null;
     openGraphMetadata?: ((OpenGraphMetadata) | null);
     openLinksInNewTab?: (boolean) | null;
@@ -3213,6 +3309,14 @@ export type QueryRatingRange = {
     lte?: (number) | null;
 };
 
+export type QueryToolOptions = {
+    max_price_option_description?: (string) | null;
+    min_price_option_description?: (string) | null;
+    price_filter_description?: (string) | null;
+    query_parameter_description?: (string) | null;
+    tool_description?: (string) | null;
+};
+
 /**
  * Query is the search query. This can be any string. The query will be used to create an embedding vector and/or SPLADE vector which will be used to find the result set.  You can either provide one query, or multiple with weights. Multi-query only works with Semantic Search and is not compatible with cross encoder re-ranking or highlights.
  */
@@ -3289,7 +3393,7 @@ export type RAGAnalytics = {
     type: 'popular_chats';
 };
 
-export type type4 = 'rag_queries';
+export type type7 = 'rag_queries';
 
 export type RAGAnalyticsFilter = {
     component_name?: (string) | null;
@@ -3504,7 +3608,7 @@ export type RecommendationAnalytics = {
     type: 'event_funnel';
 };
 
-export type type5 = 'low_confidence_recommendations';
+export type type8 = 'low_confidence_recommendations';
 
 export type RecommendationAnalyticsFilter = {
     component_name?: (string) | null;
@@ -3613,7 +3717,7 @@ export type RegenerateMessageReqPayload = {
      */
     no_result_message?: (string) | null;
     /**
-     * Only include docs used in the completion. If not specified, this defaults to false.
+     * Only include docs used is a boolean that indicates whether or not to only include the docs that were used in the completion. If true, the completion will only include the docs that were used in the completion. If false, the completion will include all of the docs.
      */
     only_include_docs_used?: (boolean) | null;
     /**
@@ -3643,6 +3747,10 @@ export type RegenerateMessageReqPayload = {
      */
     topic_id: string;
     typo_options?: ((TypoOptions) | null);
+    /**
+     * If true, the search will be conducted using llm tool calling. If not specified, this defaults to false.
+     */
+    use_agentic_search?: (boolean) | null;
     /**
      * If use_group_search is set to true, the search will be conducted using the `search_over_groups` api. If not specified, this defaults to false.
      */
@@ -3713,7 +3821,7 @@ export type ScrapeOptions = (CrawlOpenAPIOptions & {
     type: 'youtube';
 });
 
-export type type6 = 'openapi';
+export type type9 = 'openapi';
 
 export type ScrollChunksReqPayload = {
     filters?: ((ChunkFilter) | null);
@@ -3799,7 +3907,7 @@ export type SearchAnalytics = {
     type: 'search_revenue';
 };
 
-export type type7 = 'latency_graph';
+export type type10 = 'latency_graph';
 
 export type SearchAnalyticsFilter = {
     component_name?: (string) | null;
@@ -4441,6 +4549,13 @@ export type SuggestedQueriesReqPayload = {
      */
     context?: (string) | null;
     filters?: ((ChunkFilter) | null);
+    /**
+     * Whether of not the suggested queries are being generated for ecommerce.
+     */
+    is_ecommerce?: (boolean) | null;
+    /**
+     * Whether or not the suggested queries are being generated for a followup question. If true, the suggested queries will be generated for a followup question. If false, the suggested queries will be generated for a new question.
+     */
     is_followup?: (boolean) | null;
     /**
      * The query to base the generated suggested queries off of using RAG. A hybrid search for 10 chunks from your dataset using this query will be performed and the context of the chunks will be used to generate the suggested queries.
@@ -4507,6 +4622,10 @@ export type TokenizerType = {
      * Examples: "Qwen/Qwen-tokenizer", "facebook/bart-large"
      */
     String: string;
+};
+
+export type ToolConfiguration = {
+    query_tool_options?: ((QueryToolOptions) | null);
 };
 
 /**
@@ -4633,13 +4752,20 @@ export type TotalUniqueUsersResponse = {
     total_unique_users: number;
 };
 
+export type TranscribeAudioReqPayload = {
+    /**
+     * The base64 encoded audio input of the user's input message.
+     */
+    base64_audio: string;
+};
+
 export type TrievePlan = (StripePlan & {
     type: 'flat';
 }) | (StripeUsageBasedPlan & {
     type: 'usage_based';
 });
 
-export type type8 = 'flat';
+export type type11 = 'flat';
 
 export type TrieveSubscription = (StripeSubscription & {
     type: 'flat';
@@ -5933,6 +6059,15 @@ export type GetAllTagsData = {
 
 export type GetAllTagsResponse2 = (GetAllTagsResponse);
 
+export type GetDatasetQueueLengthsData = {
+    /**
+     * The dataset id or tracking_id to use for the request. We assume you intend to use an id if the value is a valid uuid.
+     */
+    trDataset: string;
+};
+
+export type GetDatasetQueueLengthsResponse = (DatasetQueueLengthsResponse);
+
 export type GetGroupsForDatasetData = {
     /**
      * The cursor offset for. Requires `use_cursor` = True. Defaults to `00000000-00000000-00000000-00000000`. Group ids are compared to the cursor using a greater than or equal to.
@@ -6342,6 +6477,19 @@ export type EditImageData = {
 
 export type EditImageResponse = (ImageEditResponse);
 
+export type GenerateMessageCompletionsData = {
+    /**
+     * JSON request payload to generate a message completion
+     */
+    requestBody: GenerateMessageCompletionsReqPayload;
+    /**
+     * The dataset id or tracking_id to use for the request. We assume you intend to use an id if the value is a valid uuid.
+     */
+    trDataset: string;
+};
+
+export type GenerateMessageCompletionsResponse = (string);
+
 export type GetToolFunctionParamsData = {
     /**
      * JSON request payload to get the parameters for a tool function
@@ -6354,6 +6502,19 @@ export type GetToolFunctionParamsData = {
 };
 
 export type GetToolFunctionParamsResponse = (GetToolFunctionParamsRespBody);
+
+export type TranscribeAudioData = {
+    /**
+     * JSON request payload to transcribe an audio file
+     */
+    requestBody: TranscribeAudioReqPayload;
+    /**
+     * The dataset id or tracking_id to use for the request. We assume you intend to use an id if the value is a valid uuid.
+     */
+    trDataset: string;
+};
+
+export type TranscribeAudioResponse = (string);
 
 export type GetMessageByIdData = {
     /**
@@ -7706,6 +7867,21 @@ export type $OpenApiTs = {
             };
         };
     };
+    '/api/dataset/get_dataset_queue_lengths': {
+        get: {
+            req: GetDatasetQueueLengthsData;
+            res: {
+                /**
+                 * Queue lengths for file and chunk creation
+                 */
+                200: DatasetQueueLengthsResponse;
+                /**
+                 * Service error relating to getting the queue lengths
+                 */
+                400: ErrorResponseBody;
+            };
+        };
+    };
     '/api/dataset/groups/{dataset_id}/{page}': {
         get: {
             req: GetGroupsForDatasetData;
@@ -8178,6 +8354,21 @@ export type $OpenApiTs = {
             };
         };
     };
+    '/api/message/generate_message_completions': {
+        post: {
+            req: GenerateMessageCompletionsData;
+            res: {
+                /**
+                 * The generated message completion
+                 */
+                200: string;
+                /**
+                 * Service error relating to generating a message completion
+                 */
+                400: ErrorResponseBody;
+            };
+        };
+    };
     '/api/message/get_tool_function_params': {
         post: {
             req: GetToolFunctionParamsData;
@@ -8188,6 +8379,21 @@ export type $OpenApiTs = {
                 200: GetToolFunctionParamsRespBody;
                 /**
                  * Service error relating to to updating chunk, likely due to conflicting tracking_id
+                 */
+                400: ErrorResponseBody;
+            };
+        };
+    };
+    '/api/message/transcribe_audio': {
+        post: {
+            req: TranscribeAudioData;
+            res: {
+                /**
+                 * The transcribed text
+                 */
+                200: string;
+                /**
+                 * Service error relating to transcribing the audio
                  */
                 400: ErrorResponseBody;
             };

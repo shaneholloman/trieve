@@ -158,7 +158,7 @@ pub struct FailedChunk {
 #[serde(untagged)]
 pub enum ReturnQueuedChunk {
     /// All Chunks that have been queue'd with any errors filtered out
-    Single(SingleQueuedChunkResponse),
+    Single(Box<SingleQueuedChunkResponse>),
     Batch(BatchQueuedChunkResponse),
 }
 
@@ -285,7 +285,7 @@ pub struct CreateBatchChunkReqPayload(pub Vec<ChunkReqPayload>);
 #[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
 #[serde(untagged)]
 pub enum CreateChunkReqPayloadEnum {
-    Single(CreateSingleChunkReqPayload),
+    Single(Box<CreateSingleChunkReqPayload>),
     Batch(CreateBatchChunkReqPayload),
 }
 
@@ -542,14 +542,14 @@ pub async fn create_chunk(
     }
 
     let response = match create_chunk_data.into_inner() {
-        CreateChunkReqPayloadEnum::Single(_) => ReturnQueuedChunk::Single(SingleQueuedChunkResponse {
+        CreateChunkReqPayloadEnum::Single(_) => ReturnQueuedChunk::Single(Box::new(SingleQueuedChunkResponse {
             chunk_metadata: chunk_metadatas
                 .get(0)
                 .ok_or(ServiceError::BadRequest(
                     "Failed to queue a single chunk due to deriving 0 ingestion_messages from the request data".to_string(),
                 ))?
                 .clone(),
-        }),
+        })),
         CreateChunkReqPayloadEnum::Batch(_) => ReturnQueuedChunk::Batch(BatchQueuedChunkResponse {
             chunk_metadata: chunk_metadatas,
         }),
@@ -950,7 +950,6 @@ pub struct UpdateChunkByTrackingIdData {
     )
 )]
 #[deprecated]
-
 pub async fn update_chunk_by_tracking_id(
     update_chunk_data: web::Json<UpdateChunkByTrackingIdData>,
     pool: web::Data<Pool>,
@@ -2524,6 +2523,8 @@ pub struct GenerateOffChunksReqPayload {
     pub image_config: Option<ImageConfig>,
     /// Context options to use for the completion. If not specified, all options will default to false.
     pub context_options: Option<ContextOptions>,
+    /// Model to use for the completion. If not specified, the default model configured for the dataset will be used.
+    pub model: Option<String>,
 }
 
 /// RAG on Specified Chunks
@@ -2585,7 +2586,10 @@ pub async fn generate_off_chunks(
 
     let base_url = dataset_config.LLM_BASE_URL;
     let rag_prompt = dataset_config.RAG_PROMPT.clone();
-    let chosen_model = dataset_config.LLM_DEFAULT_MODEL;
+    let chosen_model = data
+        .model
+        .clone()
+        .unwrap_or(dataset_config.LLM_DEFAULT_MODEL);
 
     let base_url = if base_url.is_empty() {
         "https://openrouter.ai/api/v1".into()
@@ -3013,7 +3017,7 @@ pub async fn generate_off_chunks(
     });
 
     if data.audio_input.is_some() {
-        return Ok(HttpResponse::Ok()
+        Ok(HttpResponse::Ok()
             .insert_header(("TR-QueryID", query_id.to_string()))
             .insert_header((
                 "X-TR-Query",
@@ -3022,12 +3026,12 @@ pub async fn generate_off_chunks(
                     .clone()
                     .replace(|c: char| c.is_ascii_control(), ""),
             ))
-            .streaming(completion_stream));
+            .streaming(completion_stream))
     } else {
-        return Ok(HttpResponse::Ok()
+        Ok(HttpResponse::Ok()
             .insert_header(("TR-QueryID", query_id.to_string()))
-            .streaming(completion_stream));
-    };
+            .streaming(completion_stream))
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -3100,7 +3104,7 @@ pub struct ChunkedContent {
 pub async fn split_html_content(
     body: web::Json<ChunkHtmlContentReqPayload>,
 ) -> Result<HttpResponse, ServiceError> {
-    if body.chunk_html.bytes().len() >= 262_144 {
+    if body.chunk_html.len() >= 262_144 {
         return Err(ServiceError::PayloadTooLarge(
             "The HTML content is too large".to_string(),
         ));

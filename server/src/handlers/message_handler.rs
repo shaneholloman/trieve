@@ -16,7 +16,8 @@ use crate::{
             create_topic_message_query, delete_message_query, get_llm_api_key,
             get_message_by_id_query, get_message_by_sort_for_topic_query,
             get_messages_for_topic_query, get_text_from_audio, get_topic_messages_query,
-            stream_response, suggested_followp_questions, suggested_new_queries,
+            stream_response, stream_response_with_agentic_search, suggested_followp_questions,
+            suggested_new_queries,
         },
         organization_operator::get_message_org_count,
     },
@@ -27,7 +28,9 @@ use base64::Engine;
 use hallucination_detection::HallucinationDetector;
 use openai_dive::v1::{
     api::Client,
+    models::WhisperModel,
     resources::{
+        audio::{AudioOutputFormat, AudioTranscriptionParametersBuilder},
         chat::{
             ChatCompletionFunction, ChatCompletionParametersBuilder, ChatCompletionTool,
             ChatCompletionToolType, ChatMessage, ChatMessageContent, ChatMessageContentPart,
@@ -103,7 +106,7 @@ pub struct CreateMessageReqPayload {
     pub context_options: Option<ContextOptions>,
     /// No result message for when there are no chunks found above the score threshold.
     pub no_result_message: Option<String>,
-    /// Only include docs used in the completion. If not specified, this defaults to false.
+    /// Only include docs used is a boolean that indicates whether or not to only include the docs that were used in the completion. If true, the completion will only include the docs that were used in the completion. If false, the completion will include all of the docs.
     pub only_include_docs_used: Option<bool>,
     /// The currency to use for the completion. If not specified, this defaults to "USD".
     pub currency: Option<String>,
@@ -131,6 +134,8 @@ pub struct CreateMessageReqPayload {
     pub metadata: Option<serde_json::Value>,
     /// Overrides what the way chunks are placed into the context window
     pub rag_context: Option<String>,
+    /// If true, the search will be conducted using llm tool calling. If not specified, this defaults to false.
+    pub use_agentic_search: Option<bool>,
 }
 
 /// Create message
@@ -267,26 +272,43 @@ pub async fn create_message(
     let previous_messages = create_topic_message_query(
         &dataset_config,
         previous_messages,
+        create_message_data.use_agentic_search.unwrap_or(false),
+        create_message_data.only_include_docs_used.unwrap_or(false),
         new_message,
-        create_message_data.only_include_docs_used,
         dataset_org_plan_sub.dataset.id,
         &create_message_pool,
     )
     .await?;
 
-    stream_response(
-        previous_messages,
-        topic_id,
-        dataset_org_plan_sub.dataset,
-        stream_response_pool,
-        event_queue,
-        redis_pool,
-        dataset_config,
-        create_message_data,
-        #[cfg(feature = "hallucination-detection")]
-        hallucination_detector,
-    )
-    .await
+    if create_message_data.use_agentic_search.unwrap_or(false) {
+        stream_response_with_agentic_search(
+            previous_messages,
+            topic_id,
+            dataset_org_plan_sub.dataset,
+            pool,
+            redis_pool,
+            dataset_config,
+            create_message_data,
+            event_queue,
+            #[cfg(feature = "hallucination-detection")]
+            hallucination_detector,
+        )
+        .await
+    } else {
+        stream_response(
+            previous_messages,
+            topic_id,
+            dataset_org_plan_sub.dataset,
+            stream_response_pool,
+            event_queue,
+            redis_pool,
+            dataset_config,
+            create_message_data,
+            #[cfg(feature = "hallucination-detection")]
+            hallucination_detector,
+        )
+        .await
+    }
 }
 
 /// Get all messages for a given topic
@@ -390,7 +412,7 @@ pub struct RegenerateMessageReqPayload {
     pub context_options: Option<ContextOptions>,
     /// No result message for when there are no chunks found above the score threshold.
     pub no_result_message: Option<String>,
-    /// Only include docs used in the completion. If not specified, this defaults to false.
+    /// Only include docs used is a boolean that indicates whether or not to only include the docs that were used in the completion. If true, the completion will only include the docs that were used in the completion. If false, the completion will include all of the docs.
     pub only_include_docs_used: Option<bool>,
     /// The currency symbol to use for the completion. If not specified, this defaults to "$".
     pub currency: Option<String>,
@@ -418,6 +440,8 @@ pub struct RegenerateMessageReqPayload {
     pub metadata: Option<serde_json::Value>,
     /// Overrides what the way chunks are placed into the context window
     pub rag_context: Option<String>,
+    /// If true, the search will be conducted using llm tool calling. If not specified, this defaults to false.
+    pub use_agentic_search: Option<bool>,
 }
 
 #[derive(Serialize, Debug, ToSchema)]
@@ -444,7 +468,7 @@ pub struct EditMessageReqPayload {
     pub context_options: Option<ContextOptions>,
     /// No result message for when there are no chunks found above the score threshold.
     pub no_result_message: Option<String>,
-    /// Only include docs used in the completion. If not specified, this defaults to false.
+    /// Only include docs used is a boolean that indicates whether or not to only include the docs that were used in the completion. If true, the completion will only include the docs that were used in the completion. If false, the completion will include all of the docs.
     pub only_include_docs_used: Option<bool>,
     /// The currency symbol to use for the completion. If not specified, this defaults to "$".
     pub currency: Option<String>,
@@ -472,6 +496,8 @@ pub struct EditMessageReqPayload {
     pub metadata: Option<serde_json::Value>,
     /// Overrides what the way chunks are placed into the context window
     pub rag_context: Option<String>,
+    /// If true, the search will be conducted using llm tool calling. If not specified, this defaults to false.
+    pub use_agentic_search: Option<bool>,
 }
 
 impl From<EditMessageReqPayload> for CreateMessageReqPayload {
@@ -495,12 +521,13 @@ impl From<EditMessageReqPayload> for CreateMessageReqPayload {
             user_id: data.user_id,
             context_options: data.context_options,
             no_result_message: data.no_result_message,
-            only_include_docs_used: data.only_include_docs_used,
             use_quote_negated_terms: data.use_quote_negated_terms,
             remove_stop_words: data.remove_stop_words,
             typo_options: data.typo_options,
             metadata: data.metadata,
             rag_context: data.rag_context,
+            use_agentic_search: data.use_agentic_search,
+            only_include_docs_used: data.only_include_docs_used,
         }
     }
 }
@@ -526,12 +553,13 @@ impl From<RegenerateMessageReqPayload> for CreateMessageReqPayload {
             user_id: data.user_id,
             context_options: data.context_options,
             no_result_message: data.no_result_message,
-            only_include_docs_used: data.only_include_docs_used,
             use_quote_negated_terms: data.use_quote_negated_terms,
             remove_stop_words: data.remove_stop_words,
             typo_options: data.typo_options,
             metadata: data.metadata,
             rag_context: data.rag_context,
+            use_agentic_search: data.use_agentic_search,
+            only_include_docs_used: data.only_include_docs_used,
         }
     }
 }
@@ -656,7 +684,6 @@ pub async fn regenerate_message_patch(
     check_completion_param_validity(data.llm_options.clone())?;
 
     let get_messages_pool = pool.clone();
-    let create_message_pool = pool.clone();
     let dataset_id = dataset_org_plan_sub.dataset.id;
 
     let mut previous_messages =
@@ -668,20 +695,38 @@ pub async fn regenerate_message_patch(
         );
     }
 
+    let create_message_data: CreateMessageReqPayload = data.into_inner().into();
+
     if previous_messages.len() == 2 {
-        return stream_response(
-            previous_messages,
-            topic_id,
-            dataset_org_plan_sub.dataset,
-            create_message_pool,
-            event_queue,
-            redis_pool.clone(),
-            dataset_config,
-            data.into_inner().into(),
-            #[cfg(feature = "hallucination-detection")]
-            hallucination_detector,
-        )
-        .await;
+        if create_message_data.use_agentic_search.unwrap_or(false) {
+            return stream_response_with_agentic_search(
+                previous_messages,
+                topic_id,
+                dataset_org_plan_sub.dataset,
+                pool,
+                redis_pool,
+                dataset_config,
+                create_message_data,
+                event_queue,
+                #[cfg(feature = "hallucination-detection")]
+                hallucination_detector,
+            )
+            .await;
+        } else {
+            return stream_response(
+                previous_messages,
+                topic_id,
+                dataset_org_plan_sub.dataset,
+                pool,
+                event_queue,
+                redis_pool,
+                dataset_config,
+                create_message_data,
+                #[cfg(feature = "hallucination-detection")]
+                hallucination_detector,
+            )
+            .await;
+        }
     }
 
     // remove citations from the previous messages
@@ -744,19 +789,35 @@ pub async fn regenerate_message_patch(
 
     delete_message_query(message_id, topic_id, dataset_id, &pool).await?;
 
-    stream_response(
-        previous_messages_to_regenerate,
-        topic_id,
-        dataset_org_plan_sub.dataset,
-        create_message_pool,
-        event_queue,
-        redis_pool.clone(),
-        dataset_config,
-        data.into_inner().into(),
-        #[cfg(feature = "hallucination-detection")]
-        hallucination_detector,
-    )
-    .await
+    if create_message_data.use_agentic_search.unwrap_or(false) {
+        stream_response_with_agentic_search(
+            previous_messages,
+            topic_id,
+            dataset_org_plan_sub.dataset,
+            pool,
+            redis_pool,
+            dataset_config,
+            create_message_data,
+            event_queue,
+            #[cfg(feature = "hallucination-detection")]
+            hallucination_detector,
+        )
+        .await
+    } else {
+        stream_response(
+            previous_messages,
+            topic_id,
+            dataset_org_plan_sub.dataset,
+            pool,
+            event_queue,
+            redis_pool,
+            dataset_config,
+            create_message_data,
+            #[cfg(feature = "hallucination-detection")]
+            hallucination_detector,
+        )
+        .await
+    }
 }
 
 /// Regenerate message
@@ -827,8 +888,10 @@ pub struct SuggestedQueriesReqPayload {
     pub context: Option<String>,
     /// Filters is a JSON object which can be used to filter chunks. This is useful for when you want to filter chunks by arbitrary metadata. Unlike with tag filtering, there is a performance hit for filtering on metadata.
     pub filters: Option<ChunkFilter>,
-
+    /// Whether or not the suggested queries are being generated for a followup question. If true, the suggested queries will be generated for a followup question. If false, the suggested queries will be generated for a new question.
     pub is_followup: Option<bool>,
+    /// Whether of not the suggested queries are being generated for ecommerce.
+    pub is_ecommerce: Option<bool>,
 }
 
 #[derive(Deserialize, Serialize, Debug, ToSchema)]
@@ -1162,12 +1225,8 @@ pub async fn get_tool_function_params(
     };
 
     let resp_body = GetToolFunctionParamsRespBody {
-        parameters: tool_call.and_then(|tool_call| {
-            match serde_json::from_str(&tool_call.function.arguments) {
-                Ok(parameters) => Some(parameters),
-                Err(_) => None,
-            }
-        }),
+        parameters: tool_call
+            .and_then(|tool_call| serde_json::from_str(&tool_call.function.arguments).ok()),
     };
 
     if data.audio_input.is_some() {
@@ -1411,4 +1470,206 @@ pub async fn edit_image(
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(HttpResponse::Ok().json(ImageEditResponse { image_urls }))
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct TranscribeAudioReqPayload {
+    /// The base64 encoded audio input of the user's input message.
+    pub base64_audio: String,
+}
+
+/// Transcribe Audio
+///
+/// Uses `whisper-1` to transcribe an audio file passed in as a base64 encoded string.
+#[utoipa::path(
+    post,
+    path = "/message/transcribe_audio",
+    context_path = "/api",
+    tag = "Message",
+    request_body(content = TranscribeAudioReqPayload, description = "JSON request payload to transcribe an audio file", content_type = "application/json"),
+    responses(
+        (status = 200, description = "The transcribed text", body = String,
+            headers(
+                ("TR-QueryID" = uuid::Uuid, description = "Query ID that is used for tracking analytics")
+            )
+        ),
+        (status = 400, description = "Service error relating to transcribing the audio", body = ErrorResponseBody),
+    ),
+    params(
+        ("TR-Dataset" = uuid::Uuid, Header, description = "The dataset id or tracking_id to use for the request. We assume you intend to use an id if the value is a valid uuid."),
+    ),
+    security(
+        ("ApiKey" = ["admin"]),
+    )
+)]
+pub async fn transcribe_audio(
+    data: web::Json<TranscribeAudioReqPayload>,
+    dataset_org_plan_sub: DatasetAndOrgWithSubAndPlan,
+    _required_user: AdminOnly,
+) -> Result<HttpResponse, ServiceError> {
+    let audio_bytes = base64::decode(data.base64_audio.clone()).map_err(|err| {
+        log::error!("Failed to decode base64 audio: {:?}", err);
+        ServiceError::BadRequest(format!("Error decoding audio base64: {:?}", err))
+    })?;
+
+    let dataset_config =
+        DatasetConfiguration::from_json(dataset_org_plan_sub.dataset.clone().server_configuration);
+
+    let llm_api_key = get_llm_api_key(&dataset_config);
+    let mut base_url = dataset_config.LLM_BASE_URL.clone();
+
+    if !base_url.contains("openai.com") {
+        base_url = "https://api.openai.com/v1".to_string();
+    }
+
+    let client = Client {
+        headers: None,
+        api_key: llm_api_key,
+        project: None,
+        http_client: reqwest::Client::new(),
+        base_url,
+        organization: None,
+    };
+
+    let file_upload = FileUpload::Bytes(FileUploadBytes {
+        filename: "audio.mp3".to_string(),
+        bytes: audio_bytes.into(),
+    });
+
+    let parameters = AudioTranscriptionParametersBuilder::default()
+        .file(file_upload)
+        .model(WhisperModel::Whisper1.to_string())
+        .response_format(AudioOutputFormat::Text)
+        .language("en".to_string())
+        .build()
+        .map_err(|err| {
+            log::error!("Failed to build transcription parameters: {:?}", err);
+            ServiceError::InternalServerError(format!(
+                "Failed to build transcription parameters: {:?}",
+                err
+            ))
+        })?;
+
+    let transcribed_text = client
+        .audio()
+        .create_transcription(parameters)
+        .await
+        .map_err(|err| {
+            log::error!("Failed to transcribe audio: {:?}", err);
+            ServiceError::InternalServerError(format!("Failed to transcribe audio: {:?}", err))
+        })?;
+
+    Ok(HttpResponse::Ok().json(transcribed_text.replace("\n", "")))
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct GenerateMessageCompletionsReqPayload {
+    /// The system message to use for the message completion.
+    pub system_message: String,
+    /// The user message to use for the message completion.
+    pub user_message: String,
+}
+
+/// Generate Message Completions
+///
+/// Uses `openai` to generate a message completion for a given prompt.
+#[utoipa::path(
+    post,
+    path = "/message/generate_message_completions",
+    context_path = "/api",
+    tag = "Message",
+    request_body(content = GenerateMessageCompletionsReqPayload, description = "JSON request payload to generate a message completion", content_type = "application/json"),
+    responses(
+        (status = 200, description = "The generated message completion", body = String,
+            headers(
+                ("TR-QueryID" = uuid::Uuid, description = "Query ID that is used for tracking analytics")
+            )
+        ),
+        (status = 400, description = "Service error relating to generating a message completion", body = ErrorResponseBody),
+    ),
+    params(
+        ("TR-Dataset" = uuid::Uuid, Header, description = "The dataset id or tracking_id to use for the request. We assume you intend to use an id if the value is a valid uuid."),
+    ),
+    security(
+        ("ApiKey" = ["admin"]),
+    )
+)]
+pub async fn generate_message_completions(
+    data: web::Json<GenerateMessageCompletionsReqPayload>,
+    dataset_org_plan_sub: DatasetAndOrgWithSubAndPlan,
+    _required_user: AdminOnly,
+) -> Result<HttpResponse, ServiceError> {
+    let dataset_config =
+        DatasetConfiguration::from_json(dataset_org_plan_sub.dataset.clone().server_configuration);
+
+    let llm_api_key = get_llm_api_key(&dataset_config);
+    let mut base_url = dataset_config.LLM_BASE_URL.clone();
+
+    if !base_url.contains("openai.com") {
+        base_url = "https://api.openai.com/v1".to_string();
+    }
+
+    let client = Client {
+        headers: None,
+        api_key: llm_api_key,
+        project: None,
+        http_client: reqwest::Client::new(),
+        base_url,
+        organization: None,
+    };
+
+    let system_message = ChatMessage::System {
+        content: ChatMessageContent::Text(data.system_message.clone()),
+        name: None,
+    };
+
+    let user_message = ChatMessage::User {
+        content: ChatMessageContent::Text(data.user_message.clone()),
+        name: None,
+    };
+
+    let parameters = ChatCompletionParametersBuilder::default()
+        .model("gpt-4o-mini".to_string())
+        .messages(vec![system_message, user_message])
+        .build()
+        .map_err(|err| {
+            log::error!("Failed to build message completion parameters: {:?}", err);
+            ServiceError::InternalServerError(format!(
+                "Failed to build message completion parameters: {:?}",
+                err
+            ))
+        })?;
+
+    let message_completion = client.chat().create(parameters).await.map_err(|err| {
+        log::error!("Failed to generate message completion: {:?}", err);
+        ServiceError::InternalServerError(format!(
+            "Failed to generate message completion: {:?}",
+            err
+        ))
+    })?;
+
+    let first_message = match message_completion.choices.first() {
+        Some(first_message) => first_message.message.clone(),
+        None => {
+            return Err(ServiceError::BadRequest(
+                "No first message in choices on call to LLM".to_string(),
+            ));
+        }
+    };
+
+    let response_content = match first_message {
+        ChatMessage::Assistant {
+            content: Some(ChatMessageContent::Text(content)),
+            ..
+        } => content,
+        _ => {
+            log::error!(
+                "ChatMessage of first choice did not have text or was either Tool or Function {:?}",
+                first_message
+            );
+            "ChatMessage of first did not have text or was either Tool or Function".to_string()
+        }
+    };
+
+    Ok(HttpResponse::Ok().json(response_content))
 }

@@ -185,6 +185,8 @@ impl Modify for SecurityAddon {
         handlers::message_handler::get_suggested_queries,
         handlers::message_handler::get_tool_function_params,
         handlers::message_handler::edit_image,
+        handlers::message_handler::transcribe_audio,
+        handlers::message_handler::generate_message_completions,
         handlers::chunk_handler::create_chunk,
         handlers::chunk_handler::update_chunk,
         handlers::chunk_handler::delete_chunk,
@@ -259,6 +261,7 @@ impl Modify for SecurityAddon {
         handlers::dataset_handler::get_pagefind_index_for_dataset,
         handlers::dataset_handler::clear_dataset,
         handlers::dataset_handler::clone_dataset,
+        handlers::dataset_handler::get_dataset_queue_lengths,
         handlers::payment_handler::direct_to_payment_link,
         handlers::payment_handler::cancel_subscription,
         handlers::payment_handler::update_subscription_plan,
@@ -319,6 +322,8 @@ impl Modify for SecurityAddon {
             handlers::message_handler::ImageUpload,
             handlers::message_handler::ImageEditResponse,
             handlers::message_handler::ImageResponseData,
+            handlers::message_handler::TranscribeAudioReqPayload,
+            handlers::message_handler::GenerateMessageCompletionsReqPayload,
             handlers::chunk_handler::FullTextBoost,
             handlers::chunk_handler::ChunkReqPayload,
             handlers::chunk_handler::CreateChunkReqPayloadEnum,
@@ -360,6 +365,7 @@ impl Modify for SecurityAddon {
             handlers::dataset_handler::GetAllTagsResponse,
             handlers::dataset_handler::Datasets,
             handlers::dataset_handler::GetPagefindIndexResponse,
+            handlers::dataset_handler::DatasetQueueLengthsResponse,
             handlers::crawl_handler::GetCrawlRequestsReqPayload,
             handlers::crawl_handler::CreateCrawlReqPayload,
             handlers::crawl_handler::UpdateCrawlReqPayload,
@@ -472,12 +478,14 @@ impl Modify for SecurityAddon {
             handlers::page_handler::RelevanceToolCallOptions,
             handlers::page_handler::PriceToolCallOptions,
             handlers::page_handler::SearchToolCallOptions,
+            handlers::page_handler::NotFilterToolCallOptions,
             handlers::page_handler::PublicPageTheme,
             handlers::page_handler::PublicPageParameters,
             handlers::page_handler::PublicPageTabMessage,
             handlers::page_handler::SearchPageProps,
             handlers::page_handler::FilterSidebarSection,
             handlers::page_handler::DefaultSearchQuery,
+            handlers::page_handler::DefaultSearchQueryType,
             handlers::page_handler::TagProp,
             handlers::page_handler::RangeSliderConfig,
             handlers::page_handler::SidebarFilters,
@@ -496,6 +504,9 @@ impl Modify for SecurityAddon {
             utils::clickhouse_query::AnalyticsQuery,
             utils::clickhouse_query::SubQuery,
             utils::clickhouse_query::JoinClause,
+            utils::clickhouse_query::HavingCondition,
+            utils::clickhouse_query::ExpressionType,
+            utils::clickhouse_query::JoinCondition,
             utils::clickhouse_query::FilterCondition,
             utils::clickhouse_query::Column,
             utils::clickhouse_query::AggregationType,
@@ -680,6 +691,8 @@ impl Modify for SecurityAddon {
             data::models::TopicQuery,
             data::models::TopicAnalyticsFilter,
             data::models::TopPages,
+            data::models::QueryToolOptions,
+            data::models::ToolConfiguration,
             data::models::FloatRange,
             data::models::RecommendationUsageGraphResponse,
             data::models::RecommendationsPerUserResponse,
@@ -864,7 +877,7 @@ pub fn main() -> std::io::Result<()> {
 
 
         let metrics = Metrics::new().map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to create metrics {:?}", e))
+            std::io::Error::other(format!("Failed to create metrics {:?}", e))
         })?;
 
         #[cfg(feature = "hallucination-detection")]
@@ -880,7 +893,7 @@ pub fn main() -> std::io::Result<()> {
 
 
         let broccoli_queue = BroccoliQueue::builder(redis_url).pool_connections(redis_connections.try_into().unwrap()).build().await.map_err(|e| {
-            std::io::Error::new(std::io::ErrorKind::Other, format!("Failed to create broccoli queue {:?}", e))
+            std::io::Error::other(format!("Failed to create broccoli queue {:?}", e))
         })?;
 
         let num_workers: usize = match std::env::var("NUM_WORKERS") {
@@ -1063,6 +1076,10 @@ pub fn main() -> std::io::Result<()> {
                                         .route(web::post().to(handlers::dataset_handler::get_all_tags)),
                                 )
                                 .service(
+                                    web::resource("/get_dataset_queue_lengths")
+                                        .route(web::get().to(handlers::dataset_handler::get_dataset_queue_lengths)),
+                                )
+                                .service(
                                     web::resource("/events")
                                         .route(web::post().to(handlers::event_handler::get_events)),
                                 )
@@ -1162,7 +1179,7 @@ pub fn main() -> std::io::Result<()> {
                                         .cache_prefix("function_params:")
                                         .ttl(60 * 60 * 24)
                                         .cache_if(|ctx| {
-                                            return ctx.body.get("audio_input").is_none() || ctx.body.get("audio_input").unwrap().is_null();
+                                            ctx.body.get("audio_input").is_none() || ctx.body.get("audio_input").unwrap().is_null()
                                         })
                                         .build()
                                 )
@@ -1170,6 +1187,14 @@ pub fn main() -> std::io::Result<()> {
                         .service(
                             web::resource("/message/edit_image")
                                 .route(web::post().to(handlers::message_handler::edit_image))
+                        )
+                        .service(
+                            web::resource("/message/transcribe_audio")
+                                .route(web::post().to(handlers::message_handler::transcribe_audio))
+                        )
+                        .service(
+                            web::resource("/message/generate_message_completions")
+                                .route(web::post().to(handlers::message_handler::generate_message_completions))
                         )
                         .service(
                             web::resource("/message/{message_id}")
@@ -1431,8 +1456,7 @@ pub fn main() -> std::io::Result<()> {
                                         .route(web::delete().to(
                                             handlers::organization_handler::delete_organization,
                                         )),
-                                )
-                                .service(
+                                ).service(
                                     web::resource("")
                                         .route(
                                             web::post().to(
@@ -1444,7 +1468,7 @@ pub fn main() -> std::io::Result<()> {
                                                 handlers::organization_handler::update_organization,
                                             ),
                                         ),
-                                ),
+                                    ),
                         )
                         .service(
                             web::scope("/invitation")

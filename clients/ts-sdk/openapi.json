@@ -4239,6 +4239,57 @@
         ]
       }
     },
+    "/api/dataset/get_dataset_queue_lengths": {
+      "get": {
+        "tags": [
+          "Dataset"
+        ],
+        "summary": "Get file and chunk creation queue lengths",
+        "description": "Get the queue lengths for file and chunk creation.",
+        "operationId": "get_dataset_queue_lengths",
+        "parameters": [
+          {
+            "name": "TR-Dataset",
+            "in": "header",
+            "description": "The dataset id or tracking_id to use for the request. We assume you intend to use an id if the value is a valid uuid.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Queue lengths for file and chunk creation",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DatasetQueueLengthsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Service error relating to getting the queue lengths",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": [
+              "readonly"
+            ]
+          }
+        ]
+      }
+    },
     "/api/dataset/groups/{dataset_id}/{page}": {
       "get": {
         "tags": [
@@ -6188,6 +6239,77 @@
         ]
       }
     },
+    "/api/message/generate_message_completions": {
+      "post": {
+        "tags": [
+          "Message"
+        ],
+        "summary": "Generate Message Completions",
+        "description": "Uses `openai` to generate a message completion for a given prompt.",
+        "operationId": "generate_message_completions",
+        "parameters": [
+          {
+            "name": "TR-Dataset",
+            "in": "header",
+            "description": "The dataset id or tracking_id to use for the request. We assume you intend to use an id if the value is a valid uuid.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "JSON request payload to generate a message completion",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateMessageCompletionsReqPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The generated message completion",
+            "headers": {
+              "TR-QueryID": {
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "Query ID that is used for tracking analytics"
+              }
+            },
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Service error relating to generating a message completion",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
     "/api/message/get_tool_function_params": {
       "post": {
         "tags": [
@@ -6232,6 +6354,77 @@
           },
           "400": {
             "description": "Service error relating to to updating chunk, likely due to conflicting tracking_id",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponseBody"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "ApiKey": [
+              "admin"
+            ]
+          }
+        ]
+      }
+    },
+    "/api/message/transcribe_audio": {
+      "post": {
+        "tags": [
+          "Message"
+        ],
+        "summary": "Transcribe Audio",
+        "description": "Uses `whisper-1` to transcribe an audio file passed in as a base64 encoded string.",
+        "operationId": "transcribe_audio",
+        "parameters": [
+          {
+            "name": "TR-Dataset",
+            "in": "header",
+            "description": "The dataset id or tracking_id to use for the request. We assume you intend to use an id if the value is a valid uuid.",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "JSON request payload to transcribe an audio file",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TranscribeAudioReqPayload"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The transcribed text",
+            "headers": {
+              "TR-QueryID": {
+                "schema": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "description": "Query ID that is used for tracking analytics"
+              }
+            },
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Service error relating to transcribing the audio",
             "content": {
               "application/json": {
                 "schema": {
@@ -11479,7 +11672,7 @@
           },
           "only_include_docs_used": {
             "type": "boolean",
-            "description": "Only include docs used in the completion. If not specified, this defaults to false.",
+            "description": "Only include docs used is a boolean that indicates whether or not to only include the docs that were used in the completion. If true, the completion will only include the docs that were used in the completion. If false, the completion will include all of the docs.",
             "nullable": true
           },
           "page_size": {
@@ -11537,6 +11730,11 @@
                 "$ref": "#/components/schemas/TypoOptions"
               }
             ],
+            "nullable": true
+          },
+          "use_agentic_search": {
+            "type": "boolean",
+            "description": "If true, the search will be conducted using llm tool calling. If not specified, this defaults to false.",
             "nullable": true
           },
           "use_group_search": {
@@ -12149,6 +12347,14 @@
             "description": "The temperature to use",
             "nullable": true
           },
+          "TOOL_CONFIGURATION": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ToolConfiguration"
+              }
+            ],
+            "nullable": true
+          },
           "USE_MESSAGE_TO_QUERY_PROMPT": {
             "type": "boolean",
             "description": "Whether to use the message to query prompt",
@@ -12249,6 +12455,25 @@
           }
         }
       },
+      "DatasetQueueLengthsResponse": {
+        "type": "object",
+        "required": [
+          "file_queue_length",
+          "chunk_queue_length"
+        ],
+        "properties": {
+          "chunk_queue_length": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of chunks in the queue for the dataset"
+          },
+          "file_queue_length": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of files in the queue for the dataset"
+          }
+        }
+      },
       "DatasetUsageCount": {
         "type": "object",
         "required": [
@@ -12323,6 +12548,16 @@
             "nullable": true
           }
         }
+      },
+      "DefaultSearchQueryType": {
+        "oneOf": [
+          {
+            "type": "string"
+          },
+          {
+            "$ref": "#/components/schemas/DefaultSearchQuery"
+          }
+        ]
       },
       "DeleteTopicData": {
         "type": "object",
@@ -12546,7 +12781,7 @@
           },
           "only_include_docs_used": {
             "type": "boolean",
-            "description": "Only include docs used in the completion. If not specified, this defaults to false.",
+            "description": "Only include docs used is a boolean that indicates whether or not to only include the docs that were used in the completion. If true, the completion will only include the docs that were used in the completion. If false, the completion will include all of the docs.",
             "nullable": true
           },
           "page_size": {
@@ -12604,6 +12839,11 @@
                 "$ref": "#/components/schemas/TypoOptions"
               }
             ],
+            "nullable": true
+          },
+          "use_agentic_search": {
+            "type": "boolean",
+            "description": "If true, the search will be conducted using llm tool calling. If not specified, this defaults to false.",
             "nullable": true
           },
           "use_group_search": {
@@ -13511,7 +13751,7 @@
       },
       "Expression": {
         "type": "object",
-        "description": "Represents a SQL function or expression",
+        "description": "Represents a SQL expression with optional alias",
         "required": [
           "expression"
         ],
@@ -13521,8 +13761,95 @@
             "nullable": true
           },
           "expression": {
-            "type": "string"
+            "$ref": "#/components/schemas/ExpressionType"
           }
+        }
+      },
+      "ExpressionType": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "type"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "column"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "type"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "literal"
+                ]
+              },
+              "value": {
+                "$ref": "#/components/schemas/FilterValue"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "name",
+              "args",
+              "type"
+            ],
+            "properties": {
+              "args": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ExpressionType"
+                }
+              },
+              "name": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "function"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "sql",
+              "type"
+            ],
+            "properties": {
+              "sql": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "raw"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Structured expression type",
+        "discriminator": {
+          "propertyName": "type"
         }
       },
       "ExtendedOrganizationUsageCount": {
@@ -14187,6 +14514,23 @@
           }
         }
       },
+      "GenerateMessageCompletionsReqPayload": {
+        "type": "object",
+        "required": [
+          "system_message",
+          "user_message"
+        ],
+        "properties": {
+          "system_message": {
+            "type": "string",
+            "description": "The system message to use for the message completion."
+          },
+          "user_message": {
+            "type": "string",
+            "description": "The user message to use for the message completion."
+          }
+        }
+      },
       "GenerateOffChunksReqPayload": {
         "type": "object",
         "required": [
@@ -14251,6 +14595,11 @@
           },
           "metadata": {
             "description": "Metadata is any metadata you want to associate w/ the event that is created from this request",
+            "nullable": true
+          },
+          "model": {
+            "type": "string",
+            "description": "Model to use for the completion. If not specified, the default model configured for the dataset will be used.",
             "nullable": true
           },
           "presence_penalty": {
@@ -14862,7 +15211,11 @@
             }
           },
           "having": {
-            "type": "string",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/HavingCondition"
+              }
+            ],
             "nullable": true
           }
         }
@@ -15023,6 +15376,86 @@
             "description": "Tracking ids of the chunks to apply a match_any condition with. Only chunks with one of these tracking ids will be returned.",
             "nullable": true
           }
+        }
+      },
+      "HavingCondition": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "function",
+              "column",
+              "operator",
+              "value",
+              "type"
+            ],
+            "properties": {
+              "column": {
+                "type": "string"
+              },
+              "function": {
+                "$ref": "#/components/schemas/AggregationType"
+              },
+              "operator": {
+                "$ref": "#/components/schemas/FilterOperator"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "aggregate"
+                ]
+              },
+              "value": {
+                "$ref": "#/components/schemas/FilterValue"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "conditions",
+              "type"
+            ],
+            "properties": {
+              "conditions": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/HavingCondition"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "and"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "conditions",
+              "type"
+            ],
+            "properties": {
+              "conditions": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/HavingCondition"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "or"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Structured HAVING condition",
+        "discriminator": {
+          "propertyName": "type"
         }
       },
       "HeadQueries": {
@@ -15374,12 +15807,15 @@
       },
       "JoinClause": {
         "type": "object",
-        "description": "Represents a join condition between tables",
+        "description": "Represents a join between tables",
         "required": [
           "table",
-          "on_clause"
+          "condition"
         ],
         "properties": {
+          "condition": {
+            "$ref": "#/components/schemas/JoinCondition"
+          },
           "join_type": {
             "allOf": [
               {
@@ -15388,12 +15824,60 @@
             ],
             "nullable": true
           },
-          "on_clause": {
-            "type": "string"
-          },
           "table": {
             "$ref": "#/components/schemas/TableName"
           }
+        }
+      },
+      "JoinCondition": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "left_column",
+              "right_column",
+              "type"
+            ],
+            "properties": {
+              "left_column": {
+                "type": "string"
+              },
+              "right_column": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "column_equals"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "columns",
+              "type"
+            ],
+            "properties": {
+              "columns": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "using"
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Structured join condition instead of raw SQL",
+        "discriminator": {
+          "propertyName": "type"
         }
       },
       "JoinType": {
@@ -15909,6 +16393,19 @@
             "$ref": "#/components/schemas/ContentChunkMetadata"
           }
         ]
+      },
+      "NotFilterToolCallOptions": {
+        "type": "object",
+        "properties": {
+          "toolDescription": {
+            "type": "string",
+            "nullable": true
+          },
+          "userMessageTextPrefix": {
+            "type": "string",
+            "nullable": true
+          }
+        }
       },
       "OcrStrategy": {
         "type": "string",
@@ -16448,7 +16945,7 @@
           "defaultAiQuestions": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/DefaultSearchQuery"
+              "$ref": "#/components/schemas/DefaultSearchQueryType"
             },
             "nullable": true
           },
@@ -16467,7 +16964,7 @@
           "defaultSearchQueries": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/DefaultSearchQuery"
+              "$ref": "#/components/schemas/DefaultSearchQueryType"
             },
             "nullable": true
           },
@@ -16529,6 +17026,14 @@
           },
           "navLogoImgSrcUrl": {
             "type": "string",
+            "nullable": true
+          },
+          "notFilterToolCallOptions": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/NotFilterToolCallOptions"
+              }
+            ],
             "nullable": true
           },
           "numberOfSuggestions": {
@@ -17025,6 +17530,31 @@
           "gte": 1,
           "lt": 1,
           "lte": 1
+        }
+      },
+      "QueryToolOptions": {
+        "type": "object",
+        "properties": {
+          "max_price_option_description": {
+            "type": "string",
+            "nullable": true
+          },
+          "min_price_option_description": {
+            "type": "string",
+            "nullable": true
+          },
+          "price_filter_description": {
+            "type": "string",
+            "nullable": true
+          },
+          "query_parameter_description": {
+            "type": "string",
+            "nullable": true
+          },
+          "tool_description": {
+            "type": "string",
+            "nullable": true
+          }
         }
       },
       "QueryTypes": {
@@ -18843,7 +19373,7 @@
           },
           "only_include_docs_used": {
             "type": "boolean",
-            "description": "Only include docs used in the completion. If not specified, this defaults to false.",
+            "description": "Only include docs used is a boolean that indicates whether or not to only include the docs that were used in the completion. If true, the completion will only include the docs that were used in the completion. If false, the completion will include all of the docs.",
             "nullable": true
           },
           "page_size": {
@@ -18901,6 +19431,11 @@
                 "$ref": "#/components/schemas/TypoOptions"
               }
             ],
+            "nullable": true
+          },
+          "use_agentic_search": {
+            "type": "boolean",
+            "description": "If true, the search will be conducted using llm tool calling. If not specified, this defaults to false.",
             "nullable": true
           },
           "use_group_search": {
@@ -21989,8 +22524,14 @@
             ],
             "nullable": true
           },
+          "is_ecommerce": {
+            "type": "boolean",
+            "description": "Whether of not the suggested queries are being generated for ecommerce.",
+            "nullable": true
+          },
           "is_followup": {
             "type": "boolean",
+            "description": "Whether or not the suggested queries are being generated for a followup question. If true, the suggested queries will be generated for a followup question. If false, the suggested queries will be generated for a new question.",
             "nullable": true
           },
           "query": {
@@ -22185,6 +22726,19 @@
           }
         ],
         "description": "Specifies which tokenizer to use for the chunking process.\n\nThis type supports two ways of specifying a tokenizer:\n1. Using a predefined tokenizer from the `Tokenizer` enum\n2. Using any Hugging Face tokenizer by providing its model ID as a string\n(e.g. \"facebook/bart-large\", \"Qwen/Qwen-tokenizer\", etc.)\n\nWhen using a string, any valid Hugging Face tokenizer ID can be specified,\nwhich will be loaded using the Hugging Face tokenizers library."
+      },
+      "ToolConfiguration": {
+        "type": "object",
+        "properties": {
+          "query_tool_options": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/QueryToolOptions"
+              }
+            ],
+            "nullable": true
+          }
+        }
       },
       "ToolFunction": {
         "type": "object",
@@ -22595,6 +23149,18 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          }
+        }
+      },
+      "TranscribeAudioReqPayload": {
+        "type": "object",
+        "required": [
+          "base64_audio"
+        ],
+        "properties": {
+          "base64_audio": {
+            "type": "string",
+            "description": "The base64 encoded audio input of the user's input message."
           }
         }
       },

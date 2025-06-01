@@ -27,6 +27,7 @@ import {
   $OpenApiTs,
   ChunkMetadata,
   CrawlRequest,
+  NotFilterToolCallOptions,
   PriceToolCallOptions,
   PublicPageTabMessage,
   RelevanceToolCallOptions,
@@ -86,11 +87,17 @@ export const defaultSearchToolCallOptions: SearchToolCallOptions = {
 
 export const defaultPriceToolCallOptions: PriceToolCallOptions = {
   toolDescription:
-    "Only call this function if the query includes details about a price. Decide on which price filters to apply to the available catalog being used within the knowledge base to respond. If the question is slightly like a product name, respond with no filters (all false).",
+    "Only call this function if the query includes details about a price. Decide on which price filters to apply to the available catalog being used within the knowledge base to respond. If the question is slightly like a product name, respond with no filters (all false). If they don't specify a price number, then respond with no filters (all false).",
   minPriceDescription:
     "Minimum price of the product. Only set this if a minimum price is mentioned in the query.",
   maxPriceDescription:
     "Maximum price of the product. Only set this if a maximum price is mentioned in the query.",
+};
+
+export const defaultNotFilterToolCallOptions: NotFilterToolCallOptions = {
+  userMessageTextPrefix: "Here is the user query:",
+  toolDescription:
+    "Set to true if the query is not interested in the products they were shown previously or would like to see something different. Ensure that this is only set to true when the user wants to see something different from the previously returned results or is not interested in those previously returned results.",
 };
 
 const searchTypeOptions = [
@@ -661,7 +668,11 @@ const PublicPageControls = () => {
               }?...`}
               value={
                 extraParams.defaultSearchQueries?.map((q) =>
-                  q.query ? q.query + "," + (q.imageUrl ?? "") : q.query ?? "",
+                  typeof q === "string"
+                    ? q
+                    : q.query
+                      ? q.query + "," + (q.imageUrl ?? "")
+                      : q.query ?? "",
                 ) || []
               }
               onChange={(e) => {
@@ -700,7 +711,11 @@ const PublicPageControls = () => {
               }?...`}
               value={
                 extraParams.defaultAiQuestions?.map((q) =>
-                  q.query ? q.query + "," + (q.imageUrl ?? "") : q.query ?? "",
+                  typeof q === "string"
+                    ? q
+                    : q.query
+                      ? q.query + "," + (q.imageUrl ?? "")
+                      : q.query ?? "",
                 ) || []
               }
               onChange={(e) => {
@@ -1766,6 +1781,77 @@ const PublicPageControls = () => {
           </div>
         </details>
 
+        <details class="my-4">
+          <summary class="cursor-pointer text-sm font-medium">
+            Not Filter Tool Options
+          </summary>
+          <div class="mt-4 space-y-4">
+            <div class="grid grid-cols-2 gap-4">
+              <div class="grow">
+                <div class="flex items-center gap-1">
+                  <label class="block" for="">
+                    Not Filter Tool Description
+                  </label>
+                  <Tooltip
+                    tooltipText="Description of the not filter tool provided to the model."
+                    body={
+                      <FaRegularCircleQuestion class="h-3 w-3 text-black" />
+                    }
+                  />
+                </div>
+                <textarea
+                  value={
+                    (extraParams.notFilterToolCallOptions?.toolDescription ||
+                      defaultNotFilterToolCallOptions.toolDescription) as string
+                  }
+                  onInput={(e) =>
+                    setExtraParams(
+                      "notFilterToolCallOptions",
+                      "toolDescription",
+                      e.currentTarget.value,
+                    )
+                  }
+                  rows="4"
+                  name="messageToQueryPrompt"
+                  id="messageToQueryPrompt"
+                  class="block w-full rounded-md border-[0.5px] border-neutral-300 px-3 py-1.5 shadow-sm placeholder:text-neutral-400 focus:outline-magenta-500 sm:text-sm sm:leading-6"
+                />
+              </div>
+              <div class="grow">
+                <div class="flex items-center gap-1">
+                  <label class="block" for="">
+                    Not Filter Prompt
+                  </label>
+                  <Tooltip
+                    tooltipText="Prompt to the model to use the search tool."
+                    body={
+                      <FaRegularCircleQuestion class="h-3 w-3 text-black" />
+                    }
+                  />
+                </div>
+                <textarea
+                  value={
+                    (extraParams.notFilterToolCallOptions
+                      ?.userMessageTextPrefix ||
+                      defaultNotFilterToolCallOptions.userMessageTextPrefix) as string
+                  }
+                  onInput={(e) =>
+                    setExtraParams(
+                      "notFilterToolCallOptions",
+                      "userMessageTextPrefix",
+                      e.currentTarget.value,
+                    )
+                  }
+                  rows="4"
+                  name="messageToQueryPrompt"
+                  id="messageToQueryPrompt"
+                  class="block w-full rounded-md border-[0.5px] border-neutral-300 px-3 py-1.5 shadow-sm placeholder:text-neutral-400 focus:outline-magenta-500 sm:text-sm sm:leading-6"
+                />
+              </div>
+            </div>
+          </div>
+        </details>
+
         <div class="space-x-1.5 pt-8">
           <button
             class="inline-flex justify-center rounded-md bg-magenta-500 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-magenta-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-magenta-900 disabled:opacity-40"
@@ -2227,6 +2313,110 @@ export const SearchOptions = () => {
 export const TagOptions = () => {
   const { extraParams, setExtraParams, tagOptionsError, setTagOptionsError } =
     usePublicPage();
+  const trieve = useTrieve();
+  const datasetContext = useContext(DatasetContext);
+  const [tags, setTags] = createSignal<RetrievedTag[]>([]);
+  const [filledTags, setFilledTags] = createSignal<Tag[]>([]);
+  const [currentPage, setCurrentPage] = createSignal(1);
+  const [totalTags, setTotalTags] = createSignal(0);
+  const [isLoading, setIsLoading] = createSignal(false);
+
+  const getTags = async (pageNumber: number) => {
+    setIsLoading(true);
+    try {
+      const response = await trieve.fetch("/api/dataset/get_all_tags", "post", {
+        data: {
+          page: pageNumber,
+          page_size: 100,
+        },
+        datasetId: datasetContext.datasetId(),
+      });
+
+      setTags((prev) => [
+        ...prev,
+        ...response.tags.map((tag) => ({
+          tag_count: tag.count,
+          name: tag.tag,
+        })),
+      ]);
+
+      setTotalTags(response.total);
+      return response.total;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const autoConfigureTags = async () => {
+    setTags([]);
+    setFilledTags([]);
+
+    await getTags(1);
+
+    if (!isLoading() && tags().length < totalTags()) {
+      setCurrentPage((prev) => prev + 1);
+      await getTags(currentPage());
+    }
+
+    tags().sort((a, b) => b.tag_count - a.tag_count);
+
+    const max_tag_generation = Math.min(5, tags().length);
+
+    let index = 0;
+    while (index < max_tag_generation) {
+      const dataset_chunks = await trieve.fetch("/api/chunks/scroll", "post", {
+        data: {
+          filters: {
+            must: [
+              {
+                field: "tag_set",
+                match_any: [tags()[index].name],
+              },
+            ],
+          },
+        },
+        datasetId: datasetContext.datasetId(),
+      });
+
+      const system_prompt = `You are a helpful assistant that generates useful and complete tag descriptions for a product in the context of ${
+        extraParams.brandName || "this store"
+      }. The tag description should be 1-2 sentences long and should be in english. It should indicate when the following product would be classified under this tag as a boolean. Start all responses with "Whether the" and proceed with describing when the tag should be set to true and when it should be set to false. It should be concise and to the point, highlighting the key defining features of the category. The returning text should NOT include an introduction and NOT contain anything but strictly the tag description. Do not restate or reintroduce the tag name in the description. Be strict in discerning when the tag should be set to true versus false and ensure that this is clear in the generated output.`;
+
+      const user_prompt = `Generate a tag description for the following product that would help classify and distinguish this product from other products in ${
+        extraParams.brandName || "this store"
+      }. An example of a product that would be classified under this tag is ${
+        dataset_chunks.chunks[0].chunk_html
+      }. Another example of a product that would be classified under this tag is ${
+        dataset_chunks.chunks[1].chunk_html
+      }. Based on these examples and following the previously outlined guidelines, generate the following tag description: ${JSON.stringify(
+        tags()[index],
+      )}`;
+
+      const response = await trieve.fetch(
+        "/api/message/generate_message_completions",
+        "post",
+        {
+          data: {
+            system_message: system_prompt,
+            user_message: user_prompt,
+          },
+          datasetId: datasetContext.datasetId(),
+        },
+      );
+
+      setFilledTags((prev) => [
+        ...prev,
+        {
+          tag: tags()[index].name,
+          label: tags()[index].name.replace(" ", "_").replace("/", "_"),
+          description: response?.replace?.("\n", "") || "",
+        },
+      ]);
+      setExtraParams("tags", filledTags());
+      index++;
+    }
+  };
+
   return (
     <div class="mt-1">
       <div class="flex items-baseline justify-between">
@@ -2254,12 +2444,20 @@ export const TagOptions = () => {
           }
         }}
         value={() => {
-          return extraParams?.searchOptions || [];
+          return extraParams?.tags || [];
         }}
         onError={(message) => {
           setTagOptionsError(message);
         }}
       />
+      <button
+        onClick={() => {
+          void autoConfigureTags();
+        }}
+        class="mt-2 inline-flex min-w-[130px] justify-center rounded-md bg-magenta-500 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-magenta-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-magenta-900 disabled:animate-pulse"
+      >
+        Auto Configure
+      </button>
       <Show when={tagOptionsError()}>
         <div class="text-red-500">{tagOptionsError()}</div>
       </Show>
@@ -2340,6 +2538,17 @@ export const OgOptions = () => {
     </details>
   );
 };
+
+interface RetrievedTag {
+  name: string;
+  tag_count: number;
+}
+
+interface Tag {
+  tag: string;
+  label: string;
+  description: string;
+}
 
 export const SerpPageOptions = () => {
   const { extraParams, setExtraParams } = usePublicPage();

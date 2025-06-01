@@ -11,9 +11,10 @@ use std::sync::{Arc, Mutex};
 use crate::data::models::DummyHallucinationScore;
 use crate::data::models::{
     self, escape_quotes, ChunkMetadata, ChunkMetadataStringTagSet,
-    ChunkMetadataStringTagSetWithHighlightsScore, ChunkMetadataTypes, Dataset,
-    DatasetConfiguration, LLMOptions, MultiQuery, QdrantChunkMetadata, QueryTypes,
-    RagQueryEventClickhouse, RedisPool, ScoreChunk, SearchMethod, SearchModalities, SuggestType,
+    ChunkMetadataStringTagSetWithHighlightsScore, ChunkMetadataTypes, ConditionType, Dataset,
+    DatasetConfiguration, FieldCondition, LLMOptions, MultiQuery, QdrantChunkMetadata, QueryTypes,
+    RagQueryEventClickhouse, Range, RangeCondition, RedisPool, ScoreChunk, SearchMethod,
+    SearchModalities, SuggestType,
 };
 use crate::diesel::prelude::*;
 use crate::get_env;
@@ -21,7 +22,7 @@ use crate::handlers::chunk_handler::SearchChunksReqPayload;
 use crate::handlers::group_handler::SearchOverGroupsReqPayload;
 use crate::handlers::message_handler::{CreateMessageReqPayload, SuggestedQueriesReqPayload};
 use crate::operators::clickhouse_operator::ClickHouseEvent;
-use crate::operators::parse_operator::convert_html_to_text;
+use crate::operators::parse_operator::{convert_html_to_text, parse_streaming_completetion};
 use crate::operators::qdrant_operator::scroll_dataset_points;
 use crate::{
     data::models::{Message, Pool, SearchQueryEventClickhouse},
@@ -36,12 +37,14 @@ use futures::StreamExt;
 use futures_util::stream;
 #[cfg(feature = "hallucination-detection")]
 use hallucination_detection::{HallucinationDetector, HallucinationScore};
+use openai_dive::v1::endpoints::chat::RoleTrackingStream;
 use openai_dive::v1::resources::audio::{AudioOutputFormat, AudioTranscriptionParametersBuilder};
 use openai_dive::v1::resources::chat::{
-    ChatCompletionChoice, ChatMessageContentPart, ChatMessageImageContentPart,
-    ChatMessageTextContentPart, DeltaChatMessage, ImageUrlType,
+    ChatCompletionChoice, ChatCompletionFunction, ChatCompletionTool, ChatCompletionToolType,
+    ChatMessageContentPart, ChatMessageImageContentPart, ChatMessageTextContentPart,
+    DeltaChatMessage, DeltaFunction, Function, ImageUrlType, ToolCall,
 };
-use openai_dive::v1::resources::shared::{FileUpload, FileUploadBytes};
+use openai_dive::v1::resources::shared::{FileUpload, FileUploadBytes, FinishReason};
 use openai_dive::v1::{
     api::Client,
     resources::{
@@ -56,7 +59,6 @@ use ureq::json;
 use super::chunk_operator::get_chunk_metadatas_from_point_ids;
 use super::clickhouse_operator::{get_latency_from_header, EventQueue};
 use super::model_operator::{count_message_tokens, count_tokens};
-use super::parse_operator::parse_streaming_completetion;
 use super::search_operator::{
     assemble_qdrant_filter, hybrid_search_over_groups, search_chunks_query, search_hybrid_chunks,
     search_over_groups_query, ParsedQuery, ParsedQueryTypes,
@@ -175,28 +177,68 @@ pub async fn create_messages_query(
     Ok(())
 }
 
+const AGENTIC_SEARCH_SYSTEM_PROMPT: &str = r#"
+You are a smart assistant with access to a search tool that can query a knowledge base for accurate and relevant information. Use this tool when you need to find facts, product details, or pricing information to answer the user's question correctly.
+How to Use the Search Tool:
+When using the search tool, you must provide:
+    query: A string describing what you're looking for (e.g. "wireless headphones with noise cancellation").
+    price_filter (optional): An object that limits results based on price range.
+
+Example with price filter:
+If a user asks:
+“Find laptops under $1000”
+
+Your query should be:
+{
+  "query": "laptops",
+  "price_filter": {
+    "min": null,
+    "max": 1000
+  }
+}
+
+You can also set both:
+{
+  "query": "4K TVs",
+  "price_filter": {
+    "min": 500,
+    "max": 1500
+  }
+}
+
+If price isn't relevant, you can leave the filter empty or set both min and max to null.
+Search Process:
+Start with a simple query, with or without a price filter.
+Refine your query using the results if you don’t get enough useful info.
+Repeat until you're confident you can answer well.
+
+Important:
+If you use the search tool, you must use the chunks_used tool to select the relevant content before writing your reply.
+Your response must be based only on the selected chunks.
+You can use the search tool multiple times to gather more context.
+Your job is to be accurate, helpful, and complete—based only on what you find. Be smart, be curious, and use price filters when needed to meet the user's needs.
+"#;
+
 const STRUCTURE_SYSTEM_PROMPT: &str = r#"
 Before you start generating respond with the documents that you plan to use to generate your response, YOU MUST INCLUDE AT LEAST 1.
 YOU MUST DO THIS BEFORE YOU CONTINUE TO GENERATE A RESPONSE.
 After responding with the documents, YOU MUST RESPOND TO THE USERS PROMPT.
-
 ```
 Example:
 User: 
 Here's my prompt: what about for spreadsheets \n\n Use the following retrieved documents to respond briefly and accurately: {"doc": 1, "text": "chunk text..", "link": "chunk link.." }\n\n{"doc": 2, "text": "chunk text..", "link": "chunk link.." }... etc
-
 Assistant:
 documents: [1,2]
 ...continue with model response
 ```
-
 After you have done these things now follow:
 "#;
 
 pub async fn create_generic_system_message(
     system_prompt: String,
+    use_agentic_search: bool,
+    only_include_docs_used: bool,
     messages_topic_id: uuid::Uuid,
-    only_include_used_docs: Option<bool>,
     dataset_id: uuid::Uuid,
     pool: &web::Data<Pool>,
 ) -> Result<Message, ServiceError> {
@@ -204,11 +246,15 @@ pub async fn create_generic_system_message(
         crate::operators::topic_operator::get_topic_query(messages_topic_id, dataset_id, pool)
             .await?;
 
-    let system_prompt = if only_include_used_docs.unwrap_or(false) {
-        format!("{}\n\n{}", STRUCTURE_SYSTEM_PROMPT, system_prompt)
+    let mut system_prompt = if use_agentic_search {
+        format!("{}\n\n{}", AGENTIC_SEARCH_SYSTEM_PROMPT, system_prompt)
     } else {
         system_prompt
     };
+
+    if only_include_docs_used {
+        system_prompt = format!("{}\n\n{}", STRUCTURE_SYSTEM_PROMPT, system_prompt);
+    }
 
     let system_message = Message::from_details(
         system_prompt,
@@ -227,8 +273,9 @@ pub async fn create_generic_system_message(
 pub async fn create_topic_message_query(
     config: &DatasetConfiguration,
     previous_messages: Vec<Message>,
+    use_agentic_search: bool,
+    only_include_docs_used: bool,
     new_message: Message,
-    only_include_used_docs: Option<bool>,
     dataset_id: uuid::Uuid,
     pool: &web::Data<Pool>,
 ) -> Result<Vec<Message>, ServiceError> {
@@ -239,8 +286,9 @@ pub async fn create_topic_message_query(
     if previous_messages.is_empty() {
         let system_message = create_generic_system_message(
             config.SYSTEM_PROMPT.clone(),
+            use_agentic_search,
+            only_include_docs_used,
             new_message.topic_id,
-            only_include_used_docs,
             dataset_id,
             pool,
         )
@@ -748,7 +796,6 @@ pub fn clean_markdown(markdown_text: &str) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
-
 pub async fn stream_response(
     messages: Vec<models::Message>,
     topic_id: uuid::Uuid,
@@ -1418,7 +1465,7 @@ pub async fn stream_response(
     });
 
     if create_message_req_payload.audio_input.is_some() {
-        return Ok(HttpResponse::Ok()
+        Ok(HttpResponse::Ok()
             .insert_header((
                 "X-TR-Query",
                 user_message
@@ -1426,11 +1473,1249 @@ pub async fn stream_response(
                     .replace(|c: char| c.is_ascii_control(), ""),
             ))
             .insert_header(("TR-QueryID", query_id.to_string().replace("\n", "")))
-            .streaming(completion_stream));
+            .streaming(completion_stream))
     } else {
-        return Ok(HttpResponse::Ok()
+        Ok(HttpResponse::Ok()
             .insert_header(("TR-QueryID", query_id.to_string().replace("\n", "")))
-            .streaming(completion_stream));
+            .streaming(completion_stream))
+    }
+}
+
+#[derive(Deserialize, Debug)]
+struct PriceFilter {
+    min: Option<f32>,
+    max: Option<f32>,
+}
+#[derive(Deserialize, Debug)]
+struct SearchParams {
+    query: String,
+    price_filter: Option<PriceFilter>,
+}
+
+async fn search_chunks(
+    create_message_req_payload: CreateMessageReqPayload,
+    search_params: SearchParams,
+    dataset: Dataset,
+    pool: web::Data<Pool>,
+    redis_pool: web::Data<RedisPool>,
+    dataset_config: DatasetConfiguration,
+    event_queue: web::Data<EventQueue>,
+) -> Result<(SearchQueryEventClickhouse, Vec<ScoreChunk>), ServiceError> {
+    let query = search_params.query;
+    let price_filter = search_params.price_filter;
+
+    let filters = create_message_req_payload.filters.clone();
+    if let Some(price_filter) = price_filter {
+        filters.map(|filter| {
+            filter.must.map(|mut must| {
+                must.push(ConditionType::Field(FieldCondition {
+                    field: "num_value".to_string(),
+                    range: Some(Range {
+                        gte: price_filter.min.map(|x| RangeCondition::Float(x as f64)),
+                        lte: price_filter.max.map(|x| RangeCondition::Float(x as f64)),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }))
+            })
+        });
+    }
+
+    let search_type = create_message_req_payload
+        .search_type
+        .unwrap_or(SearchMethod::Hybrid);
+
+    let query_type =
+        if let Some(ref image_urls) = create_message_req_payload.image_urls.and_then(|x| {
+            if x.is_empty() {
+                None
+            } else {
+                Some(x)
+            }
+        }) {
+            let image_queries = image_urls.iter().map(|url| MultiQuery {
+                query: SearchModalities::Image {
+                    image_url: url.clone(),
+                    llm_prompt: None,
+                },
+                weight: 0.5 / image_urls.len() as f32,
+            });
+
+            QueryTypes::Multi(
+                vec![MultiQuery {
+                    query: SearchModalities::Text(query.clone()),
+                    weight: 0.5,
+                }]
+                .into_iter()
+                .chain(image_queries)
+                .collect(),
+            )
+        } else {
+            QueryTypes::Single(SearchModalities::Text(query.clone()))
+        };
+
+    if create_message_req_payload
+        .use_group_search
+        .is_some_and(|x| x)
+    {
+        let search_groups_data = SearchOverGroupsReqPayload {
+            search_type: search_type.clone(),
+            query: query_type.clone(),
+            score_threshold: create_message_req_payload.score_threshold,
+            page_size: Some(10),
+            sort_options: create_message_req_payload.sort_options,
+            highlight_options: create_message_req_payload.highlight_options,
+            filters: create_message_req_payload.filters,
+            group_size: Some(1),
+            use_quote_negated_terms: create_message_req_payload.use_quote_negated_terms,
+            remove_stop_words: create_message_req_payload.remove_stop_words,
+            typo_options: create_message_req_payload.typo_options,
+            ..Default::default()
+        };
+
+        let parsed_query = ParsedQuery {
+            query: query.clone(),
+            quote_words: None,
+            negated_words: None,
+        };
+
+        let mut search_timer = Timer::new();
+
+        let result_groups = match search_type {
+            SearchMethod::Hybrid => {
+                hybrid_search_over_groups(
+                    search_groups_data.clone(),
+                    parsed_query,
+                    pool.clone(),
+                    redis_pool,
+                    dataset.clone(),
+                    &dataset_config,
+                    &mut search_timer,
+                )
+                .await?
+            }
+            _ => {
+                search_over_groups_query(
+                    search_groups_data.clone(),
+                    ParsedQueryTypes::Single(parsed_query),
+                    pool.clone(),
+                    redis_pool,
+                    dataset.clone(),
+                    &dataset_config,
+                    &mut search_timer,
+                )
+                .await?
+            }
+        };
+
+        let clickhouse_search_event = SearchQueryEventClickhouse {
+            request_params: serde_json::to_string(&search_groups_data.clone()).unwrap_or_default(),
+            id: uuid::Uuid::new_v4(),
+            search_type: "rag_groups".to_string(),
+            tokens: count_tokens(&query),
+            query: query.clone(),
+            dataset_id: dataset.id,
+            organization_id: dataset.organization_id,
+            metadata: serde_json::to_string(&create_message_req_payload.metadata.clone())
+                .unwrap_or_default(),
+            top_score: result_groups
+                .group_chunks
+                .get(0)
+                .map(|x| x.metadata.get(0).map(|y| y.score as f32).unwrap_or(0.0))
+                .unwrap_or(0.0),
+            latency: get_latency_from_header(search_timer.header_value()),
+            results: result_groups
+                .group_chunks
+                .clone()
+                .into_iter()
+                .map(|x| {
+                    let mut json = serde_json::to_value(&x).unwrap_or_default();
+                    escape_quotes(&mut json);
+                    json.to_string()
+                })
+                .collect(),
+            created_at: time::OffsetDateTime::now_utc(),
+            query_rating: String::from(""),
+            user_id: create_message_req_payload
+                .user_id
+                .clone()
+                .unwrap_or_default(),
+        };
+        if !dataset_config.DISABLE_ANALYTICS {
+            event_queue
+                .send(ClickHouseEvent::SearchQueryEvent(
+                    clickhouse_search_event.clone(),
+                ))
+                .await;
+        }
+
+        Ok((
+            clickhouse_search_event,
+            result_groups
+                .group_chunks
+                .into_iter()
+                .flat_map(|group_score_chunk| {
+                    group_score_chunk
+                        .metadata
+                        .into_iter()
+                        .map(ScoreChunk::from)
+                        .collect::<Vec<ScoreChunk>>()
+                })
+                .collect::<Vec<ScoreChunk>>(),
+        ))
+    } else {
+        let search_chunk_data = SearchChunksReqPayload {
+            search_type: search_type.clone(),
+            query: query_type.clone(),
+            score_threshold: create_message_req_payload.score_threshold,
+            sort_options: create_message_req_payload.sort_options,
+            page_size: Some(10),
+            highlight_options: create_message_req_payload.highlight_options,
+            filters: create_message_req_payload.filters,
+            use_quote_negated_terms: create_message_req_payload.use_quote_negated_terms,
+            remove_stop_words: create_message_req_payload.remove_stop_words,
+            typo_options: create_message_req_payload.typo_options,
+            ..Default::default()
+        };
+        let parsed_query = ParsedQuery {
+            query: query.clone(),
+            quote_words: None,
+            negated_words: None,
+        };
+        let mut search_timer = Timer::new();
+        let result_chunks = match search_type {
+            SearchMethod::Hybrid => {
+                search_hybrid_chunks(
+                    search_chunk_data.clone(),
+                    parsed_query,
+                    pool.clone(),
+                    redis_pool,
+                    dataset.clone(),
+                    &dataset_config,
+                    &mut search_timer,
+                )
+                .await?
+            }
+            _ => {
+                search_chunks_query(
+                    search_chunk_data.clone(),
+                    ParsedQueryTypes::Single(parsed_query),
+                    pool.clone(),
+                    redis_pool,
+                    dataset.clone(),
+                    &dataset_config,
+                    &mut search_timer,
+                )
+                .await?
+            }
+        };
+
+        let clickhouse_search_event = SearchQueryEventClickhouse {
+            request_params: serde_json::to_string(&search_chunk_data.clone()).unwrap_or_default(),
+            id: uuid::Uuid::new_v4(),
+            search_type: "rag_chunks".to_string(),
+            tokens: count_tokens(&query),
+            query: query.clone(),
+            dataset_id: dataset.id,
+            organization_id: dataset.organization_id,
+            top_score: result_chunks
+                .score_chunks
+                .get(0)
+                .map(|x| x.score as f32)
+                .unwrap_or(0.0),
+            latency: get_latency_from_header(search_timer.header_value()),
+            metadata: serde_json::to_string(&create_message_req_payload.metadata.clone())
+                .unwrap_or_default(),
+            results: result_chunks
+                .score_chunks
+                .clone()
+                .into_iter()
+                .map(|x| {
+                    let mut json = serde_json::to_value(&x).unwrap_or_default();
+                    escape_quotes(&mut json);
+                    json.to_string()
+                })
+                .collect(),
+            created_at: time::OffsetDateTime::now_utc(),
+            query_rating: String::from(""),
+            user_id: create_message_req_payload
+                .user_id
+                .clone()
+                .unwrap_or_default(),
+        };
+        if !dataset_config.DISABLE_ANALYTICS {
+            event_queue
+                .send(ClickHouseEvent::SearchQueryEvent(
+                    clickhouse_search_event.clone(),
+                ))
+                .await;
+        }
+
+        Ok((
+            clickhouse_search_event,
+            result_chunks
+                .score_chunks
+                .into_iter()
+                .map(ScoreChunk::from)
+                .collect::<Vec<ScoreChunk>>(),
+        ))
+    }
+}
+
+async fn handle_search_tool_call(
+    tool_call: ToolCall,
+    create_message_req_payload: CreateMessageReqPayload,
+    dataset: Dataset,
+    pool: web::Data<Pool>,
+    redis_pool: web::Data<RedisPool>,
+    dataset_config: DatasetConfiguration,
+    event_queue: web::Data<EventQueue>,
+) -> Result<(Vec<ScoreChunk>, String, SearchQueryEventClickhouse), ServiceError> {
+    let search_params = serde_json::from_str::<SearchParams>(&tool_call.function.arguments)
+        .map_err(|e| ServiceError::BadRequest(e.to_string()))?;
+
+    let (clickhouse_search_event, results) = search_chunks(
+        create_message_req_payload.clone(),
+        search_params,
+        dataset.clone(),
+        pool.clone(),
+        redis_pool.clone(),
+        dataset_config.clone(),
+        event_queue.clone(),
+    )
+    .await?;
+
+    let formatted_results = results
+        .iter()
+        .take(10)
+        .map(|score_chunk| {
+            let chunk_metadata = ChunkMetadata::from(score_chunk.chunk.clone());
+            json!({
+                "id": chunk_metadata.id,
+                "content": convert_html_to_text(&chunk_metadata.chunk_html.unwrap_or_default()),
+                "tag_set": chunk_metadata.tag_set.clone(),
+                "metadata": chunk_metadata.metadata.clone(),
+                "num_value": chunk_metadata.num_value,
+                "score": score_chunk.score,
+                "link": chunk_metadata.link.unwrap_or_default()
+            })
+        })
+        .collect::<Vec<_>>();
+
+    Ok((
+        results,
+        serde_json::to_string(&formatted_results).unwrap_or_default(),
+        clickhouse_search_event,
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn stream_response_with_agentic_search(
+    messages: Vec<models::Message>,
+    topic_id: uuid::Uuid,
+    dataset: Dataset,
+    pool: web::Data<Pool>,
+    redis_pool: web::Data<RedisPool>,
+    dataset_config: DatasetConfiguration,
+    create_message_req_payload: CreateMessageReqPayload,
+    event_queue: web::Data<EventQueue>,
+    #[cfg(feature = "hallucination-detection")] hallucination_detector: web::Data<
+        HallucinationDetector,
+    >,
+) -> Result<HttpResponse, actix_web::Error> {
+    let user_message_query = match create_message_req_payload.concat_user_messages_query {
+        Some(true) => messages
+            .iter()
+            .filter(|message| message.role == "user")
+            .map(|message| message.content.clone())
+            .collect::<Vec<String>>()
+            .join("\n\n"),
+        _ => match messages.last() {
+            Some(last_message) => last_message.content.clone(),
+            None => "".to_string(),
+        },
+    };
+
+    let mut openai_messages: Vec<ChatMessage> = messages
+        .iter()
+        .map(|message| ChatMessage::from(message.clone()))
+        .collect();
+
+    openai_messages.push(ChatMessage::User {
+        content: ChatMessageContent::Text(user_message_query.clone()),
+        name: None,
+    });
+
+    if let Some(image_urls) = create_message_req_payload.image_urls.clone() {
+        if !image_urls.is_empty() {
+            openai_messages.push(ChatMessage::User {
+                name: None,
+                content: ChatMessageContent::ContentPart(
+                    image_urls
+                        .iter()
+                        .map(|url| {
+                            ChatMessageContentPart::Image(ChatMessageImageContentPart {
+                                r#type: "image_url".to_string(),
+                                image_url: ImageUrlType {
+                                    url: url.to_string(),
+                                    detail: None,
+                                },
+                            })
+                        })
+                        .chain(std::iter::once(ChatMessageContentPart::Text(
+                            ChatMessageTextContentPart {
+                                r#type: "text".to_string(),
+                                text:
+                                    "These are the images that the user provided with their query."
+                                        .to_string(),
+                            },
+                        )))
+                        .collect::<Vec<_>>(),
+                ),
+            });
+        }
+    }
+
+    let base_url = dataset_config.LLM_BASE_URL.clone();
+
+    let llm_api_key = get_llm_api_key(&dataset_config);
+
+    let client = Client {
+        headers: None,
+        project: None,
+        api_key: llm_api_key,
+        http_client: reqwest::Client::new(),
+        base_url,
+        organization: None,
+    };
+
+    let next_message_order = move || {
+        let messages_len = messages.len();
+        if messages_len == 0 {
+            return 2;
+        }
+        messages_len
+    };
+
+    let chosen_model = dataset_config.LLM_DEFAULT_MODEL.clone();
+
+    let tools = vec![ChatCompletionTool {
+        r#type: ChatCompletionToolType::Function,
+        function: ChatCompletionFunction {
+            name: "search".to_string(),
+            description: dataset_config.TOOL_CONFIGURATION.query_tool_options.as_ref().map(|x| x.tool_description.clone()).unwrap_or(Some("Search for relevant information in the knowledge base. You can use this tool multiple times if the information you need is not found in the first search.".to_string())),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": dataset_config.TOOL_CONFIGURATION.query_tool_options.as_ref().map(|x| x.query_parameter_description.clone()).unwrap_or(Some("The search query to find relevant information".to_string()))
+                    },
+                    "price_filter": {
+                        "type": ["object", "null"],
+                        "properties": {
+                            "min": {
+                                "type": ["number", "null"],
+                                "description": dataset_config.TOOL_CONFIGURATION.query_tool_options.as_ref().map(|x| x.min_price_option_description.clone()).unwrap_or(Some("The minimum price to filter by".to_string()))
+                            },
+                            "max": {
+                                "type": ["number", "null"],
+                                "description": dataset_config.TOOL_CONFIGURATION.query_tool_options.as_ref().map(|x| x.max_price_option_description.clone()).unwrap_or(Some("The maximum price to filter by".to_string()))
+                            }
+                        },
+                        "description": dataset_config.TOOL_CONFIGURATION.query_tool_options.as_ref().map(|x| x.price_filter_description.clone()).unwrap_or(Some("The price filter to use for the search".to_string())),
+                        "required": ["min", "max"],
+                        "additionalProperties": false
+                    }
+                },
+                "required": ["query", "price_filter"],
+                "additionalProperties": false
+            }),
+        },
+    }, ChatCompletionTool {
+        r#type: ChatCompletionToolType::Function,
+        function: ChatCompletionFunction {
+            name: "chunks_used".to_string(),
+            description: Some("This is a tool that you can use to tell the user the chunks that you plan to use to generate your response.".to_string()),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "chunks": {
+                        "type": "array",
+                        "description": "The id of the chunks that you plan to use to generate your response",
+                        "items": {
+                            "type": "string"
+                        }
+                    }
+                },
+                "required": ["chunks"],
+                "additionalProperties": false
+            }),
+        },
+    }];
+
+    let mut parameters = ChatCompletionParameters {
+        model: chosen_model,
+        messages: openai_messages.clone(),
+        tools: Some(tools.clone()),
+        ..Default::default()
+    };
+
+    if let Some(llm_options) = create_message_req_payload.llm_options.clone() {
+        parameters.stream = llm_options.stream_response;
+        parameters.temperature = dataset_config
+            .TEMPERATURE
+            .map(|x| x as f32)
+            .or(llm_options.temperature);
+        parameters.frequency_penalty = dataset_config
+            .FREQUENCY_PENALTY
+            .map(|x| x as f32)
+            .or(llm_options.frequency_penalty);
+        parameters.presence_penalty = dataset_config
+            .PRESENCE_PENALTY
+            .map(|x| x as f32)
+            .or(llm_options.presence_penalty);
+        parameters.max_completion_tokens = dataset_config
+            .MAX_TOKENS
+            .map(|x| x as u32)
+            .or(llm_options.max_tokens);
+        parameters.stop = dataset_config
+            .STOP_TOKENS
+            .clone()
+            .map(StopToken::Array)
+            .or(llm_options.stop_tokens.map(StopToken::Array));
+    }
+
+    let query_id = uuid::Uuid::new_v4();
+    let query_id_arb = query_id;
+    let completion_first = create_message_req_payload
+        .llm_options
+        .as_ref()
+        .map(|x| x.completion_first)
+        .unwrap_or(Some(false))
+        .unwrap_or(false);
+
+    let user_message = match &openai_messages
+        .last()
+        .expect("There needs to be at least 1 prior message")
+    {
+        ChatMessage::User {
+            content: ChatMessageContent::Text(text),
+            ..
+        }
+        | ChatMessage::System {
+            content: ChatMessageContent::Text(text),
+            ..
+        }
+        | ChatMessage::Assistant {
+            content: Some(ChatMessageContent::Text(text)),
+            ..
+        } => text.clone(),
+        _ => "".to_string(),
+    };
+
+    if create_message_req_payload
+        .llm_options
+        .as_ref()
+        .is_some_and(|llm_options| !llm_options.stream_response.unwrap_or(true))
+    {
+        // Non-streaming response with tool support
+        let mut conversation_messages = openai_messages.clone();
+        let mut response_text = String::new();
+        let mut prompt_tokens = 0;
+        let mut completion_tokens = 0;
+        let mut searched_chunks = Vec::new();
+        let mut search_event: Option<SearchQueryEventClickhouse> = None;
+
+        loop {
+            parameters.messages = conversation_messages.clone();
+
+            let assistant_completion =
+                client
+                    .chat()
+                    .create(parameters.clone())
+                    .await
+                    .map_err(|err| {
+                        ServiceError::BadRequest(format!(
+                            "Bad response from LLM server provider: {}",
+                            err
+                        ))
+                    })?;
+
+            prompt_tokens += assistant_completion
+                .usage
+                .as_ref()
+                .map(|usage| usage.prompt_tokens.unwrap_or(0))
+                .unwrap_or(0);
+            completion_tokens += assistant_completion
+                .usage
+                .as_ref()
+                .map(|usage| usage.completion_tokens.unwrap_or(0))
+                .unwrap_or(0);
+
+            let first_choice = assistant_completion
+                .choices
+                .get(0)
+                .ok_or_else(|| ServiceError::BadRequest("No response from LLM".to_string()))?;
+
+            match &first_choice.message {
+                ChatMessage::Assistant {
+                    content,
+                    tool_calls,
+                    ..
+                } => {
+                    // Add assistant message to conversation
+                    conversation_messages.push(first_choice.message.clone());
+
+                    if let Some(tool_calls) = tool_calls {
+                        // Handle tool calls
+                        for tool_call in tool_calls {
+                            if tool_call.function.name == "search" {
+                                let (results, formatted_results, clickhouse_search_event) =
+                                    handle_search_tool_call(
+                                        tool_call.clone(),
+                                        create_message_req_payload.clone(),
+                                        dataset.clone(),
+                                        pool.clone(),
+                                        redis_pool.clone(),
+                                        dataset_config.clone(),
+                                        event_queue.clone(),
+                                    )
+                                    .await?;
+                                search_event = Some(clickhouse_search_event);
+                                conversation_messages.push(ChatMessage::Tool {
+                                    content: formatted_results.clone(),
+                                    tool_call_id: tool_call.id.clone(),
+                                });
+                                searched_chunks.extend(results);
+                            }
+                            if tool_call.function.name == "chunks_used" {
+                                #[derive(Debug, Serialize, Deserialize)]
+                                struct ChunksUsed {
+                                    chunks: Vec<String>,
+                                }
+
+                                let chunks_used: ChunksUsed =
+                                    serde_json::from_str(&tool_call.function.arguments).unwrap();
+
+                                conversation_messages.push(ChatMessage::Tool {
+                                    content: format!(
+                                        "Chunks to use: {}",
+                                        tool_call.function.arguments
+                                    ),
+                                    tool_call_id: tool_call.id.clone(),
+                                });
+
+                                searched_chunks.retain(|chunk| {
+                                    chunks_used.chunks.contains(
+                                        &ChunkMetadata::from(chunk.chunk.clone()).id.to_string(),
+                                    )
+                                });
+
+                                let images: Vec<String> = searched_chunks
+                                    .iter()
+                                    .filter_map(|score_chunk| {
+                                        ChunkMetadata::from(score_chunk.chunk.clone())
+                                            .image_urls
+                                            .clone()
+                                    })
+                                    .flat_map(|image_urls| {
+                                        image_urls
+                                            .iter()
+                                            .filter_map(|image| image.clone())
+                                            .collect::<Vec<_>>()
+                                    })
+                                    .collect();
+
+                                if !images.is_empty() {
+                                    if let Some(image_config) = create_message_req_payload
+                                        .llm_options
+                                        .as_ref()
+                                        .and_then(|x| x.image_config.as_ref())
+                                    {
+                                        if image_config.use_images.unwrap_or(false) {
+                                            conversation_messages.push(ChatMessage::User {
+                                                name: None,
+                                                content: ChatMessageContent::ContentPart(
+                                                    images
+                                                        .iter()
+                                                        .take(
+                                                            image_config
+                                                                .images_per_chunk
+                                                                .unwrap_or(5),
+                                                        )
+                                                        .map(|url| {
+                                                            ChatMessageContentPart::Image(
+                                                                ChatMessageImageContentPart {
+                                                                    r#type: "image_url".to_string(),
+                                                                    image_url: ImageUrlType {
+                                                                        url: url.to_string(),
+                                                                        detail: None,
+                                                                    },
+                                                                },
+                                                            )
+                                                        })
+                                                        .collect::<Vec<_>>(),
+                                                ),
+                                            })
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // Continue conversation with tool results
+                        continue;
+                    } else {
+                        // No tool calls, we have the final response
+                        if let Some(ChatMessageContent::Text(text)) = content {
+                            response_text = text.clone();
+                        }
+                        break;
+                    }
+                }
+                _ => {
+                    return Err(ServiceError::BadRequest(
+                        "Invalid response format from LLM".to_string(),
+                    )
+                    .into());
+                }
+            }
+        }
+
+        let final_response = if completion_first {
+            format!(
+                "{}||{}",
+                serde_json::to_string(&searched_chunks)
+                    .unwrap_or_default()
+                    .replace("||", ""),
+                response_text
+            )
+        } else {
+            format!(
+                "{}||{}",
+                response_text,
+                serde_json::to_string(&searched_chunks)
+                    .unwrap_or_default()
+                    .replace("||", ""),
+            )
+        };
+
+        let new_message = models::Message::from_details(
+            final_response.clone(),
+            topic_id,
+            next_message_order()
+                .try_into()
+                .expect("usize to i32 conversion should always succeed"),
+            "assistant".to_string(),
+            Some(prompt_tokens as i32),
+            Some(completion_tokens as i32),
+            dataset.id,
+            query_id,
+        );
+
+        #[cfg(feature = "hallucination-detection")]
+        let score = {
+            let docs = searched_chunks
+                .iter()
+                .map(|score_chunk| {
+                    ChunkMetadata::from(score_chunk.chunk.clone())
+                        .chunk_html
+                        .clone()
+                        .unwrap_or_default()
+                })
+                .collect::<Vec<String>>();
+            hallucination_detector
+                .detect_hallucinations(&clean_markdown(&response_text), &docs)
+                .await
+                .map_err(|err| {
+                    ServiceError::BadRequest(format!("Failed to detect hallucinations: {}", err))
+                })?
+        };
+
+        #[cfg(not(feature = "hallucination-detection"))]
+        let score = DummyHallucinationScore {
+            total_score: 0.0,
+            detected_hallucinations: vec![],
+        };
+
+        let filtered_chunks_data = searched_chunks
+            .iter()
+            .map(|x| {
+                let mut json = serde_json::to_value(x).unwrap_or_default();
+                escape_quotes(&mut json);
+                json.to_string()
+            })
+            .collect::<Vec<String>>();
+
+        if let Some(search_event) = search_event {
+            let clickhouse_rag_event = RagQueryEventClickhouse {
+                id: query_id,
+                created_at: time::OffsetDateTime::now_utc(),
+                dataset_id: dataset.id,
+                organization_id: dataset.organization_id,
+                search_id: search_event.id,
+                top_score: search_event.top_score,
+                results: vec![],
+                topic_id,
+                metadata: search_event.metadata,
+                json_results: filtered_chunks_data,
+                user_message: user_message_query.clone(),
+                query_rating: String::new(),
+                rag_type: "all_chunks".to_string(),
+                llm_response: final_response.clone(),
+                user_id: create_message_req_payload
+                    .user_id
+                    .clone()
+                    .unwrap_or_default(),
+                hallucination_score: score.total_score,
+                detected_hallucinations: score.detected_hallucinations,
+                tokens: count_message_tokens(conversation_messages) + count_tokens(&response_text),
+            };
+
+            if !dataset_config.DISABLE_ANALYTICS {
+                event_queue
+                    .send(ClickHouseEvent::RagQueryEvent(clickhouse_rag_event.clone()))
+                    .await;
+            }
+        }
+
+        create_messages_query(vec![new_message], &pool).await?;
+
+        if create_message_req_payload.audio_input.is_some() {
+            return Ok(HttpResponse::Ok()
+                .insert_header((
+                    "X-TR-Query",
+                    user_message
+                        .to_string()
+                        .replace(|c: char| c.is_ascii_control(), ""),
+                ))
+                .insert_header(("TR-QueryID", query_id.to_string().replace("\n", "")))
+                .json(final_response));
+        } else {
+            return Ok(HttpResponse::Ok()
+                .insert_header(("TR-QueryID", query_id.to_string().replace("\n", "")))
+                .json(final_response));
+        }
+    }
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<web::Bytes>(100);
+
+    let create_message_req_payload_clone = create_message_req_payload.clone();
+
+    Arbiter::new().spawn(async move {
+        let mut conversation_messages = openai_messages.clone();
+        let mut all_content = String::new();
+        let mut needs_tool_response = true;
+        let mut searched_chunks = Vec::new();
+        let mut search_event: Option<SearchQueryEventClickhouse> = None;
+
+        while needs_tool_response {
+            needs_tool_response = false;
+            let mut functions: std::collections::HashMap<String, DeltaFunction> =
+                std::collections::HashMap::new();
+            let mut tool_call_ids: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
+            let mut content_buffer = String::new();
+
+            let mut loop_parameters = parameters.clone();
+            loop_parameters.messages = conversation_messages.clone();
+
+            let stream = match client.chat().create_stream(loop_parameters).await {
+                Ok(s) => s,
+                Err(e) => {
+                    log::error!("Error creating stream: {:?}", e);
+                    let _ = tx
+                        .send(web::Bytes::from(format!(", \"error\": \"{}\"", e)))
+                        .await;
+                    break;
+                }
+            };
+
+            let mut tracked_stream = RoleTrackingStream::new(stream);
+
+            while let Some(response) = tracked_stream.next().await {
+                match response {
+                    Ok(chat_response) => {
+                        for choice in &chat_response.choices {
+                            if let DeltaChatMessage::Assistant {
+                                content,
+                                tool_calls,
+                                ..
+                            } = &choice.delta
+                            {
+                                if let Some(ChatMessageContent::Text(text)) = content {
+                                    let mut response_text = String::new();
+                                    if content_buffer.is_empty() && !completion_first {
+                                        content_buffer.push_str(&format!(
+                                            "{}||",
+                                            serde_json::to_string(&searched_chunks)
+                                                .unwrap_or_default().replace("||", "")
+                                        ));
+                                        response_text.push_str(&format!(
+                                            "{}||",
+                                            serde_json::to_string(&searched_chunks)
+                                                .unwrap_or_default().replace("||", "")
+                                        ));
+                                    }
+                                    content_buffer.push_str(text);
+                                    response_text.push_str(text);
+
+                                    let _ = tx.send(web::Bytes::from(response_text)).await;
+                                }
+                                if let Some(delta_tool_calls) = tool_calls {
+                                    for delta_call in delta_tool_calls {
+                                        if let Some(id) = &delta_call.id {
+                                            tool_call_ids.insert(id.clone(), id.clone());
+                                            functions.insert(
+                                                id.clone(),
+                                                DeltaFunction {
+                                                    name: None,
+                                                    arguments: None,
+                                                },
+                                            );
+                                        }
+
+                                        let call_id = delta_call
+                                            .id
+                                            .as_ref()
+                                            .or_else(|| tool_call_ids.keys().last())
+                                            .cloned()
+                                            .unwrap_or_default();
+
+                                        if let Some(function) = functions.get_mut(&call_id) {
+                                            function.merge(&delta_call.function);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Check if we have complete tool calls
+                            match choice.finish_reason {
+                                Some(FinishReason::ToolCalls) => {
+                                    let mut tool_calls_vec = Vec::new();
+
+                                    for (call_id, function) in &functions {
+                                        if let (Some(name), Some(arguments)) =
+                                            (&function.name, &function.arguments)
+                                        {
+                                            tool_calls_vec.push(ToolCall {
+                                                id: call_id.clone(),
+                                                function: Function {
+                                                    name: name.clone(),
+                                                    arguments: arguments.clone(),
+                                                },
+                                                r#type: "function".to_string(),
+                                            });
+                                        }
+                                    }
+
+                                    if !tool_calls_vec.is_empty() {
+                                        conversation_messages.push(ChatMessage::Assistant {
+                                            content: if content_buffer.is_empty() {
+                                                None
+                                            } else {
+                                                Some(ChatMessageContent::Text(
+                                                    content_buffer.clone(),
+                                                ))
+                                            },
+                                            name: None,
+                                            audio: None,
+                                            reasoning_content: None,
+                                            refusal: None,
+                                            tool_calls: Some(tool_calls_vec.clone()),
+                                        });
+
+                                        all_content.push_str(&content_buffer);
+
+                                        // Process all tool calls
+                                        for tool_call in &tool_calls_vec {
+                                            if tool_call.function.name == "search" {
+                                                // Send search indicator
+                                                let _ = tx
+                                                    .send(web::Bytes::from(
+                                                        "\n\n[Searching...]\n\n",
+                                                    ))
+                                                    .await;
+
+                                                match handle_search_tool_call(
+                                                    tool_call.clone(),
+                                                    create_message_req_payload_clone.clone(),
+                                                    dataset.clone(),
+                                                    pool.clone(),
+                                                    redis_pool.clone(),
+                                                    dataset_config.clone(),
+                                                    event_queue.clone(),
+                                                )
+                                                .await
+                                                {
+                                                    Ok((
+                                                        chunks,
+                                                        formatted_results,
+                                                        clickhouse_search_event,
+                                                    )) => {
+                                                        search_event =
+                                                            Some(clickhouse_search_event);
+                                                        // Add tool response
+                                                        conversation_messages.push(
+                                                            ChatMessage::Tool {
+                                                                content: formatted_results,
+                                                                tool_call_id: tool_call.id.clone(),
+                                                            },
+                                                        );
+                                                        searched_chunks.extend(chunks);
+                                                        needs_tool_response = true;
+                                                    }
+                                                    Err(e) => {
+                                                        log::error!(
+                                                            "Error in search tool call: {:?}",
+                                                            e
+                                                        );
+                                                        conversation_messages.push(
+                                                            ChatMessage::Tool {
+                                                                content: format!(
+                                                                    "Error in search tool call: {}",
+                                                                    e
+                                                                ),
+                                                                tool_call_id: tool_call.id.clone(),
+                                                            },
+                                                        );
+                                                        needs_tool_response = true;
+                                                    }
+                                                }
+                                            }
+                                            if tool_call.function.name == "chunks_used" {
+                                                #[derive(Debug, Serialize, Deserialize)]
+                                                struct ChunksUsed {
+                                                    chunks: Vec<String>,
+                                                }
+
+                                                let chunks_used: ChunksUsed = serde_json::from_str(
+                                                    &tool_call.function.arguments,
+                                                )
+                                                .unwrap();
+
+                                                conversation_messages.push(ChatMessage::Tool {
+                                                    content: format!(
+                                                        "Chunks To Use: {}",
+                                                        tool_call.function.arguments
+                                                    ),
+                                                    tool_call_id: tool_call.id.clone(),
+                                                });
+
+                                                searched_chunks.retain(|chunk| {
+                                                    chunks_used.chunks.contains(
+                                                        &ChunkMetadata::from(chunk.chunk.clone())
+                                                            .id
+                                                            .to_string(),
+                                                    )
+                                                });
+
+
+                                            let images: Vec<String> = searched_chunks
+                                                .iter()
+                                                .filter_map(|score_chunk| {
+                                                    ChunkMetadata::from(score_chunk.chunk.clone())
+                                                        .image_urls
+                                                        .clone()
+                                                })
+                                                .flat_map(|image_urls| {
+                                                    image_urls
+                                                        .iter()
+                                                        .filter_map(|image| image.clone())
+                                                        .collect::<Vec<_>>()
+                                                })
+                                                .collect();
+
+                                                if !images.is_empty() {
+                                                    if let Some(image_config) = create_message_req_payload
+                                                        .llm_options
+                                                        .as_ref()
+                                                        .and_then(|x| x.image_config.as_ref())
+                                                    {
+                                                        if image_config.use_images.unwrap_or(false) {
+                                                            conversation_messages.push(ChatMessage::User {
+                                                                name: None,
+                                                                content: ChatMessageContent::ContentPart(
+                                                                    images
+                                                                        .iter()
+                                                                        .take(image_config.images_per_chunk.unwrap_or(5))
+                                                                        .map(|url| {
+                                                                            ChatMessageContentPart::Image(ChatMessageImageContentPart {
+                                                                                r#type: "image_url".to_string(),
+                                                                                image_url: ImageUrlType {
+                                                                                    url: url.to_string(),
+                                                                                    detail: None,
+                                                                                },
+                                                                            })
+                                                                        })
+                                                                        .collect::<Vec<_>>(),
+                                                                ),
+                                                            })
+                                                        }
+                                                    }
+                                                }
+
+                                                needs_tool_response = true;
+                                            }
+                                        }
+                                        tool_calls_vec.clear();
+                                    }
+                                }
+
+                                _ => {
+                                    if completion_first {
+                                        let searched_chunks =
+                                            serde_json::to_string(&searched_chunks)
+                                                .unwrap_or_default();
+                                        content_buffer.push_str(&format!("||{}", searched_chunks));
+                                        let _ = tx
+                                            .send(web::Bytes::from(format!(
+                                                "||{}",
+                                                searched_chunks
+                                            )))
+                                            .await;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::error!("Stream error: {:?}", e);
+                        let _ = tx
+                            .send(web::Bytes::from(format!(", \"error\": \"{}\"", e)))
+                            .await;
+                        break;
+                    }
+                }
+            }
+            all_content.push_str(&content_buffer);
+        }
+
+        let mut split_completion = all_content.split("||");
+
+        #[allow(unused_variables)]
+        let (response, chunks) = if completion_first {
+            let response = split_completion.next().unwrap_or_default().to_string();
+            let chunk_data: Vec<ChunkMetadataStringTagSet> =
+                serde_json::from_str(split_completion.next().unwrap_or_default())
+                    .unwrap_or_default();
+
+            (response, chunk_data)
+        } else {
+            let chunk_data: Vec<ChunkMetadataStringTagSet> =
+                serde_json::from_str(split_completion.next().unwrap_or_default())
+                    .unwrap_or_default();
+
+            let response = split_completion.next().unwrap_or_default().to_string();
+
+            (response, chunk_data)
+        };
+
+        let chunk_data: Vec<String> = chunks
+            .iter()
+            .map(|x| {
+                let mut json = serde_json::to_value(x).unwrap_or_default();
+                escape_quotes(&mut json);
+                json.to_string()
+            })
+            .collect();
+
+        let new_message = models::Message::from_details(
+            all_content.clone(),
+            topic_id,
+            next_message_order().try_into().unwrap(),
+            "assistant".to_string(),
+            None,
+            Some(all_content.len().try_into().unwrap()),
+            dataset.id,
+            query_id_arb,
+        );
+
+        if let Some(search_event) = search_event {
+            if !dataset_config.DISABLE_ANALYTICS {
+                #[cfg(feature = "hallucination-detection")]
+                let score = {
+                    let docs = chunks
+                        .iter()
+                        .map(|x| x.chunk_html.clone().unwrap_or_default())
+                        .collect::<Vec<String>>();
+
+                    hallucination_detector
+                        .detect_hallucinations(&clean_markdown(&response), &docs)
+                        .await
+                        .unwrap_or(HallucinationScore {
+                            total_score: 0.0,
+                            proper_noun_score: 0.0,
+                            number_mismatch_score: 0.0,
+                            unknown_word_score: 0.0,
+                            detected_hallucinations: vec![],
+                        })
+                };
+
+                #[cfg(not(feature = "hallucination-detection"))]
+                let score = DummyHallucinationScore {
+                    total_score: 0.0,
+                    detected_hallucinations: vec![],
+                };
+
+                let clickhouse_rag_event = RagQueryEventClickhouse {
+                    id: query_id_arb,
+                    created_at: time::OffsetDateTime::now_utc(),
+                    search_id: search_event.id,
+                    top_score: search_event.top_score,
+                    dataset_id: dataset.id,
+                    topic_id,
+                    results: vec![],
+                    json_results: chunk_data,
+                    user_message: user_message_query.clone(),
+                    metadata: search_event.metadata,
+                    query_rating: String::new(),
+                    rag_type: "all_chunks".to_string(),
+                    llm_response: all_content.clone(),
+                    user_id: create_message_req_payload
+                        .user_id
+                        .clone()
+                        .unwrap_or_default(),
+                    hallucination_score: score.total_score,
+                    detected_hallucinations: score.detected_hallucinations,
+                    tokens: count_message_tokens(conversation_messages) + count_tokens(&response),
+                    organization_id: dataset.organization_id,
+                };
+
+                event_queue
+                    .send(ClickHouseEvent::RagQueryEvent(clickhouse_rag_event.clone()))
+                    .await;
+            }
+        }
+
+        let _ = create_messages_query(vec![new_message], &pool).await;
+    });
+
+    let chat_completion_timeout = std::env::var("CHAT_COMPLETION_TIMEOUT_SECS")
+        .unwrap_or("60".to_string())
+        .parse::<u64>()
+        .unwrap_or(60);
+
+    let completion_stream = tokio_stream::wrappers::ReceiverStream::new(rx)
+        .take_until(tokio::time::sleep(std::time::Duration::from_secs(
+            chat_completion_timeout,
+        )))
+        .map(|content| -> Result<Bytes, actix_web::Error> { Ok(content) });
+
+    if create_message_req_payload.audio_input.is_some() {
+        Ok(HttpResponse::Ok()
+            .insert_header((
+                "X-TR-Query",
+                user_message
+                    .to_string()
+                    .replace(|c: char| c.is_ascii_control(), ""),
+            ))
+            .insert_header(("TR-QueryID", query_id.to_string().replace("\n", "")))
+            .streaming(completion_stream))
+    } else {
+        Ok(HttpResponse::Ok()
+            .insert_header(("TR-QueryID", query_id.to_string().replace("\n", "")))
+            .streaming(completion_stream))
     }
 }
 
@@ -1835,7 +3120,7 @@ pub async fn suggested_new_queries(
                     &mut Timer::new(),
                 )
                 .await
-                .map_err(|err| ServiceError::BadRequest(err.to_string()))?,
+                .map_err(|e| ServiceError::BadRequest(e.to_string()))?,
                 _ => search_chunks_query(
                     search_req_payload,
                     ParsedQueryTypes::Single(parsed_query),
@@ -1846,7 +3131,7 @@ pub async fn suggested_new_queries(
                     &mut Timer::new(),
                 )
                 .await
-                .map_err(|err| ServiceError::BadRequest(err.to_string()))?,
+                .map_err(|e| ServiceError::BadRequest(e.to_string()))?,
             }
             .score_chunks
             .into_iter()
@@ -1921,10 +3206,17 @@ pub async fn suggested_new_queries(
     };
     let context_sentence = match payload.context.clone() {
         Some(context) => {
-            format!(
-                "\n\nSuggest varied {query_style} queries with the following context in mind: {}.\n\n",
-                context
-            )
+            if payload.is_ecommerce.unwrap_or(false) {
+                format!(
+                    "Suggest varied {query_style} queries with the following context in mind: {}. Generate one question that requests for a comparison of two products, explicitly including these questions in the query through phrases such as 'compare, versus, different, etc...'. Another question should contain one product title, explicitly include the name of the product in the query and ask questions related to this product within the provided context. For another question, generate a question that usses the format of find me and then a broader category name that makes sense within the provided context. Ensure all queries are short and to the point.",
+                    context
+                )
+            } else {
+                format!(
+                    "Suggest varied {query_style} queries with the following context in mind: {}. Generate queries that are short, specific, and directly related to the provided context.",
+                    context
+                )
+            }
         }
         None => "".to_string(),
     };

@@ -4,6 +4,7 @@ import {
   defaultPriceToolCallOptions,
   defaultRelevanceToolCallOptions,
   defaultSearchToolCallOptions,
+  defaultNotFilterToolCallOptions,
   useModalState,
 } from "./modal-context";
 import { Chunk } from "../types";
@@ -91,18 +92,18 @@ const ChatContext = createContext<{
   rateChatCompletion: (isPositive: boolean, queryId: string | null) => void;
   productsWithClicks: ChunkIdWithIndex[];
 }>({
-  askQuestion: async () => { },
+  askQuestion: async () => {},
   currentQuestion: "",
   isLoading: false,
   loadingText: "",
   messages: [],
-  setCurrentQuestion: () => { },
-  cancelGroupChat: () => { },
-  clearConversation: () => { },
-  chatWithGroup: () => { },
-  switchToChatAndAskQuestion: async () => { },
-  stopGeneratingMessage: () => { },
-  rateChatCompletion: () => { },
+  setCurrentQuestion: () => {},
+  cancelGroupChat: () => {},
+  clearConversation: () => {},
+  chatWithGroup: () => {},
+  switchToChatAndAskQuestion: async () => {},
+  stopGeneratingMessage: () => {},
+  rateChatCompletion: () => {},
   productsWithClicks: [],
 });
 
@@ -122,6 +123,8 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
     currentGroup,
     props,
     abTreatment,
+    transcribedQuery,
+    setTranscribedQuery,
   } = useModalState();
   const [currentQuestion, setCurrentQuestion] = useState(query);
   const [currentTopic, setCurrentTopic] = useState("");
@@ -402,9 +405,7 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
     let curAudioBase64 = audioBase64;
     let questionProp = question;
     const curGroup = group || currentGroup;
-    let transcribedQuery: string | null = null;
 
-    // This only works w/ shopify rn
     const recommendOptions = props.recommendOptions;
     if (
       recommendOptions &&
@@ -428,7 +429,6 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
       }
     }
 
-    // Use group search
     let filters: ChunkFilter | null = {
       must: null,
       must_not: null,
@@ -522,6 +522,7 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
     let useImage = false;
     let referenceImageUrls: string[] = [];
     let referenceChunks: Chunk[] = [];
+    let notFilter = false;
 
     if (!groupIds || groupIds.length === 0) {
       chatMessageAbortController.current = new AbortController();
@@ -543,7 +544,6 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
             return await trieveSDK.getToolCallFunctionParams({
               user_message_text: questionProp || currentQuestion,
               image_url: localImageUrl ? localImageUrl : null,
-              audio_input: curAudioBase64 ? curAudioBase64 : null,
               tool_function: {
                 name: "get_price_filters",
                 description:
@@ -603,7 +603,6 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
                 },
               )} \n\n${props.searchToolCallOptions?.userMessageTextPrefix ?? defaultSearchToolCallOptions.userMessageTextPrefix}: ${questionProp || currentQuestion}.`,
               image_url: localImageUrl ? localImageUrl : null,
-              audio_input: curAudioBase64 ? curAudioBase64 : null,
               tool_function: {
                 name: "skip_search",
                 description:
@@ -620,7 +619,7 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
               },
             });
           }
-        })
+        });
 
         const imageFiltersPromise = retryOperation(async () => {
           if (localImageUrl) {
@@ -648,6 +647,54 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
           }
         });
 
+        const notFilterPromise = retryOperation(async () => {
+          if (!curGroup && messages.length > 1) {
+            return await trieveSDK.getToolCallFunctionParams({
+              user_message_text: `Here's the previous message thread so far: ${messages.map(
+                (message) => {
+                  if (
+                    message.type === "system" &&
+                    message.additional?.length &&
+                    props.type === "ecommerce"
+                  ) {
+                    const chunks = message.additional
+                      .map((chunk) => {
+                        return JSON.stringify({
+                          title: chunk.metadata?.title || "",
+                          description: chunk.chunk_html || "",
+                          price: chunk.num_value
+                            ? `${props.defaultCurrency || ""} ${chunk.num_value}`
+                            : "",
+                          link: chunk.link || "",
+                        });
+                      })
+                      .join("\n\n");
+                    return `\n\n${chunks}${message.text}`;
+                  } else {
+                    return `\n\n${message.text}`;
+                  }
+                },
+              )} \n\n${props.notFilterToolCallOptions?.userMessageTextPrefix ?? defaultNotFilterToolCallOptions.userMessageTextPrefix}: ${questionProp || currentQuestion}.`,
+              image_url: localImageUrl ? localImageUrl : null,
+              audio_input: curAudioBase64 ? curAudioBase64 : null,
+              tool_function: {
+                name: "not_filter",
+                description:
+                  props.notFilterToolCallOptions?.toolDescription ??
+                  defaultNotFilterToolCallOptions.toolDescription,
+                parameters: [
+                  {
+                    name: "not_filter",
+                    parameter_type: "boolean",
+                    description:
+                      "Whether or not the user is interested in the products previously shown to them. Set this to true if the user is not interested in the products they were shown or want something different.",
+                  },
+                ],
+              },
+            });
+          }
+        });
+
         const tagFiltersPromise = retryOperation(async () => {
           if (
             (!defaultMatchAnyTags || !defaultMatchAnyTags?.length) &&
@@ -659,16 +706,15 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
                 user_message_text:
                   questionProp || currentQuestion
                     ? `Get filters from the following messages: ${messages
-                      .slice(0, -1)
-                      .filter((message) => {
-                        return message.type == "user";
-                      })
-                      .map(
-                        (message) => `\n\n${message.text}`,
-                      )} \n\n ${questionProp || currentQuestion}`
+                        .slice(0, -1)
+                        .filter((message) => {
+                          return message.type == "user";
+                        })
+                        .map(
+                          (message) => `\n\n${message.text}`,
+                        )} \n\n ${questionProp || currentQuestion}`
                     : null,
                 image_url: localImageUrl ? localImageUrl : null,
-                audio_input: curAudioBase64 ? curAudioBase64 : null,
                 tool_function: {
                   name: "get_filters",
                   description:
@@ -684,11 +730,6 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
                 },
               },
               chatMessageAbortController.current.signal,
-              (headers: Record<string, string>) => {
-                if (headers["x-tr-query"] && curAudioBase64) {
-                  transcribedQuery = headers["x-tr-query"];
-                }
-              },
             );
           } else {
             return {
@@ -697,13 +738,19 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
           }
         });
 
-        const [priceFiltersResp, imageFiltersResp, tagFiltersResp, skipSearchResp] =
-          await Promise.all([
-            priceFiltersPromise,
-            imageFiltersPromise,
-            tagFiltersPromise,
-            skipSearchPromise,
-          ]);
+        const [
+          priceFiltersResp,
+          imageFiltersResp,
+          tagFiltersResp,
+          skipSearchResp,
+          notFilterResp,
+        ] = await Promise.all([
+          priceFiltersPromise,
+          imageFiltersPromise,
+          tagFiltersPromise,
+          skipSearchPromise,
+          notFilterPromise,
+        ]);
 
         if (transcribedQuery && curAudioBase64) {
           questionProp = transcribedQuery;
@@ -730,7 +777,8 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
         }
 
         useImage = (imageFiltersResp?.parameters &&
-          (imageFiltersResp.parameters as any)["image"] === true && localImageUrl) as boolean;
+          (imageFiltersResp.parameters as any)["image"] === true &&
+          localImageUrl) as boolean;
 
         const match_any_tags = [];
         if (tagFiltersResp?.parameters) {
@@ -791,6 +839,15 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
           }
         }
 
+        if (notFilterResp?.parameters) {
+          const notFilterParam = (notFilterResp.parameters as any)[
+            "not_filter"
+          ];
+          if (typeof notFilterParam === "boolean" && notFilterParam) {
+            notFilter = true;
+          }
+        }
+
         clearTimeout(toolCallTimeout);
       } catch (e) {
         console.error("error getting getToolCallFunctionParams", e);
@@ -824,6 +881,19 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
         filters.should == null
       ) {
         filters = null;
+      }
+
+      if (notFilter) {
+        if (filters == null) {
+          filters = { must_not: [] };
+        } else if (filters.must_not == null) {
+          filters.must_not = [];
+        }
+
+        (filters as ChunkFilter)?.must_not?.push({
+          field: "group_ids",
+          match_any: groupIdsInChat,
+        });
       }
 
       searchAbortController.current = new AbortController();
@@ -888,7 +958,9 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
           const searchOverGroupsResp = await retryOperation(async () => {
             return await trieveSDK.searchOverGroups(
               {
-                query: questionProp || currentQuestion,
+                query: notFilter
+                  ? `${messages[messages.length - 2]?.text} ${questionProp || currentQuestion}`
+                  : questionProp || currentQuestion,
                 search_type: "fulltext",
                 filters: filters,
                 page_size: 20,
@@ -918,13 +990,13 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
                 : null;
               const imageUrls = props.relevanceToolCallOptions?.includeImages
                 ? (
-                  (firstChunk?.image_urls?.filter(
-                    (stringOrNull): stringOrNull is string =>
-                      Boolean(stringOrNull),
-                  ) ||
-                    []) ??
-                  []
-                ).splice(0, 1)
+                    (firstChunk?.image_urls?.filter(
+                      (stringOrNull): stringOrNull is string =>
+                        Boolean(stringOrNull),
+                    ) ||
+                      []) ??
+                    []
+                  ).splice(0, 1)
                 : undefined;
               const jsonOfFirstChunk = {
                 title: (firstChunk?.metadata as any)?.title ?? "",
@@ -1116,47 +1188,47 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
 
     if (referenceImageUrls.length > 0 || curGroup) {
       if (referenceImageUrls.length == 0 && curGroup) {
-          const fulltextSearchPromise = trieveSDK.searchInGroup(
-            {
-              query: questionProp || currentQuestion,
-              search_type: "fulltext",
-              page_size: 10,
-              group_id: curGroup.id,
-              user_id: fingerprint,
-            },
-            searchAbortController.current.signal,
-          );
+        const fulltextSearchPromise = trieveSDK.searchInGroup(
+          {
+            query: questionProp || currentQuestion,
+            search_type: "fulltext",
+            page_size: 10,
+            group_id: curGroup.id,
+            user_id: fingerprint,
+          },
+          searchAbortController.current.signal,
+        );
 
-          const chunksInGroupPromise = trieveSDK.getChunksInGroup(
-            {
-              groupId: curGroup.id,
-              page: 1,
-            },
-            searchAbortController.current.signal,
-          );
+        const chunksInGroupPromise = trieveSDK.getChunksInGroup(
+          {
+            groupId: curGroup.id,
+            page: 1,
+          },
+          searchAbortController.current.signal,
+        );
 
-          const [fulltextSearchResp, chunksInGroupResp] = await Promise.all([
-            fulltextSearchPromise,
-            chunksInGroupPromise,
-          ]);
+        const [fulltextSearchResp, chunksInGroupResp] = await Promise.all([
+          fulltextSearchPromise,
+          chunksInGroupPromise,
+        ]);
 
-          const chunkIds = fulltextSearchResp.chunks.map(
-            (score_chunk) => score_chunk.chunk.id,
-          );
-          
-          chunksInGroupResp.chunks.filter((chunk) => chunkIds.includes(chunk.id));
+        const chunkIds = fulltextSearchResp.chunks.map(
+          (score_chunk) => score_chunk.chunk.id,
+        );
 
-          const topChunk = chunksInGroupResp.chunks[0];
-          
-          if (topChunk) {
-            topChunk.image_urls?.forEach((url) => {
-              if (url) {
-                referenceImageUrls.push(url);
-              }
-            });
-          }
+        chunksInGroupResp.chunks.filter((chunk) => chunkIds.includes(chunk.id));
 
-          referenceImageUrls.slice(0, 3);
+        const topChunk = chunksInGroupResp.chunks[0];
+
+        if (topChunk) {
+          topChunk.image_urls?.forEach((url) => {
+            if (url) {
+              referenceImageUrls.push(url);
+            }
+          });
+        }
+
+        referenceImageUrls = referenceImageUrls.slice(0, 3);
       }
 
       if (await handleImageEdit()) {
@@ -1200,23 +1272,23 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
         if (skipSearch) {
           createMessageFilters = props.useGroupSearch
             ? {
-              must: [
-                {
-                  field: "group_ids",
-                  match_any: groupIdsInChat,
-                },
-              ],
-            }
+                must: [
+                  {
+                    field: "group_ids",
+                    match_any: groupIdsInChat,
+                  },
+                ],
+              }
             : {
-              must: [
-                {
-                  field: "ids",
-                  match_any: messages
-                    .flatMap((m) => m.additional ?? [])
-                    .map((chunk) => chunk.id),
-                },
-              ],
-            };
+                must: [
+                  {
+                    field: "ids",
+                    match_any: messages
+                      .flatMap((m) => m.additional ?? [])
+                      .map((chunk) => chunk.id),
+                  },
+                ],
+              };
         }
         const systemPromptToUse =
           props.systemPrompt && props.systemPrompt !== ""
@@ -1229,10 +1301,6 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
             {
               topic_id: id || currentTopic,
               new_message_content: questionProp || currentQuestion,
-              audio_input:
-                curAudioBase64 && curAudioBase64?.length > 0
-                  ? curAudioBase64
-                  : undefined,
               image_urls: imageUrl ? [imageUrl] : [],
               llm_options: {
                 completion_first: false,
@@ -1258,11 +1326,7 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
               only_include_docs_used: false,
             },
             chatMessageAbortController.current.signal,
-            (headers: Record<string, string>) => {
-              if (headers["x-tr-query"] && curAudioBase64) {
-                transcribedQuery = headers["x-tr-query"];
-              }
-            },
+            undefined,
             props.overrideFetch ?? false,
           );
         reader = createMessageResp.reader;
@@ -1309,6 +1373,7 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
     }
     if (audioBase64) {
       setAudioBase64("");
+      setTranscribedQuery("");
     }
   };
 
@@ -1364,7 +1429,7 @@ function ChatProvider({ children }: { children: React.ReactNode }) {
       setImageUrl(imageUrl);
     }
 
-    const questionProp = question;
+    const questionProp = transcribedQuery || question;
     setIsDoneReading(false);
     setCurrentQuestion("");
 

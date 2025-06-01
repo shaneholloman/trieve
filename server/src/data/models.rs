@@ -2708,6 +2708,7 @@ pub struct DatasetConfiguration {
     pub DISABLE_ANALYTICS: bool,
     pub PAGEFIND_ENABLED: bool,
     pub AIMON_RERANKER_TASK_DEFINITION: String,
+    pub TOOL_CONFIGURATION: ToolConfiguration,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
@@ -2822,8 +2823,23 @@ pub struct DatasetConfigurationDTO {
     pub DISABLE_ANALYTICS: Option<bool>,
     /// Whether to enable pagefind indexing
     pub PAGEFIND_ENABLED: Option<bool>,
-
+    /// The tool configuration to use for the dataset
+    pub TOOL_CONFIGURATION: Option<ToolConfiguration>,
     pub AIMON_RERANKER_TASK_DEFINITION: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
+pub struct QueryToolOptions {
+    pub tool_description: Option<String>,
+    pub query_parameter_description: Option<String>,
+    pub price_filter_description: Option<String>,
+    pub max_price_option_description: Option<String>,
+    pub min_price_option_description: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
+pub struct ToolConfiguration {
+    pub query_tool_options: Option<QueryToolOptions>,
 }
 
 impl From<DatasetConfigurationDTO> for DatasetConfiguration {
@@ -2882,6 +2898,15 @@ impl From<DatasetConfigurationDTO> for DatasetConfiguration {
             DISABLE_ANALYTICS: dto.DISABLE_ANALYTICS.unwrap_or(false),
             PAGEFIND_ENABLED: dto.PAGEFIND_ENABLED.unwrap_or(false),
             AIMON_RERANKER_TASK_DEFINITION: dto.AIMON_RERANKER_TASK_DEFINITION.unwrap_or("Your task is to grade the relevance of context document(s) against the specified user query.".to_string()),
+            TOOL_CONFIGURATION: dto.TOOL_CONFIGURATION.unwrap_or(ToolConfiguration {
+                query_tool_options: Some(QueryToolOptions {
+                    tool_description: Some("Search for relevant information in the knowledge base. You can use this tool multiple times if the information you need is not found in the first search.".to_string()),
+                    query_parameter_description: Some("The search query to find relevant information".to_string()),
+                    price_filter_description: Some("The price filter to use for the search".to_string()),
+                    max_price_option_description: Some("The maximum price to filter by".to_string()),
+                    min_price_option_description: Some("The minimum price to filter by".to_string()),
+                }),
+            }),
         }
     }
 }
@@ -2933,6 +2958,7 @@ impl From<DatasetConfiguration> for DatasetConfigurationDTO {
             DISABLE_ANALYTICS: Some(config.DISABLE_ANALYTICS),
             PAGEFIND_ENABLED: Some(config.PAGEFIND_ENABLED),
             AIMON_RERANKER_TASK_DEFINITION: Some(config.AIMON_RERANKER_TASK_DEFINITION),
+            TOOL_CONFIGURATION: Some(config.TOOL_CONFIGURATION),
         }
     }
 }
@@ -2979,7 +3005,16 @@ impl Default for DatasetConfiguration {
             DISABLE_ANALYTICS: false,
             PAGEFIND_ENABLED: false,
             AIMON_RERANKER_TASK_DEFINITION: "Your task is to grade the relevance of context document(s) against the specified user query.".to_string(),
-        }
+            TOOL_CONFIGURATION: ToolConfiguration {
+                query_tool_options: Some(QueryToolOptions {
+                    tool_description: Some("Search for relevant information in the knowledge base. You can use this tool multiple times if the information you need is not found in the first search.".to_string()),
+                    query_parameter_description: Some("The search query to find relevant information".to_string()),
+                    price_filter_description: Some("The price filter to use for the search".to_string()),
+                    max_price_option_description: Some("The maximum price to filter by".to_string()),
+                    min_price_option_description: Some("The minimum price to filter by".to_string()),
+                }),
+            },
+            }
     }
 }
 
@@ -3281,6 +3316,36 @@ impl DatasetConfiguration {
                     s.to_string()
                 }
             }).unwrap_or("Your task is to grade the relevance of context document(s) against the specified user query.".to_string()),
+            TOOL_CONFIGURATION: configuration
+                .get("TOOL_CONFIGURATION")
+                .unwrap_or(&json!(ToolConfiguration {
+                    query_tool_options: Some(QueryToolOptions {
+                        tool_description: Some("Search for relevant information in the knowledge base. You can use this tool multiple times if the information you need is not found in the first search.".to_string()),
+                        query_parameter_description: Some("The search query to find relevant information".to_string()),
+                        price_filter_description: Some("The price filter to use for the search".to_string()),
+                        max_price_option_description: Some("The maximum price to filter by".to_string()),
+                        min_price_option_description: Some("The minimum price to filter by".to_string()),
+                    }),
+                }))
+                .as_object()
+                .map(|o| ToolConfiguration {
+                    query_tool_options: o.get("query_tool_options").unwrap_or(&json!(None::<serde_json::Value>)).as_object().map(|o| QueryToolOptions {
+                        tool_description: o.get("tool_description").unwrap_or(&json!(None::<serde_json::Value>)).as_str().map(|s| s.to_string()),
+                        query_parameter_description: o.get("query_parameter_description").unwrap_or(&json!(None::<serde_json::Value>)).as_str().map(|s| s.to_string()),
+                        price_filter_description: o.get("price_filter_description").unwrap_or(&json!(None::<serde_json::Value>)).as_str().map(|s| s.to_string()),
+                        max_price_option_description: o.get("max_price_option_description").unwrap_or(&json!(None::<serde_json::Value>)).as_str().map(|s| s.to_string()),
+                        min_price_option_description: o.get("min_price_option_description").unwrap_or(&json!(None::<serde_json::Value>)).as_str().map(|s| s.to_string()),
+                    }),
+                })
+                .unwrap_or(ToolConfiguration {
+                    query_tool_options: Some(QueryToolOptions {
+                        tool_description: Some("Search for relevant information in the knowledge base. You can use this tool multiple times if the information you need is not found in the first search.".to_string()),
+                        query_parameter_description: Some("The search query to find relevant information".to_string()),
+                        price_filter_description: Some("The price filter to use for the search".to_string()),
+                        max_price_option_description: Some("The maximum price to filter by".to_string()),
+                        min_price_option_description: Some("The minimum price to filter by".to_string()),
+                    }),
+                }),
         }
     }
 
@@ -3326,6 +3391,7 @@ impl DatasetConfiguration {
             "DISABLE_ANALYTICS": self.DISABLE_ANALYTICS,
             "PAGEFIND_ENABLED": self.PAGEFIND_ENABLED,
             "AIMON_RERANKER_TASK_DEFINITION": self.AIMON_RERANKER_TASK_DEFINITION,
+            "TOOL_CONFIGURATION": self.TOOL_CONFIGURATION,
         })
     }
 }
@@ -3478,6 +3544,9 @@ impl DatasetConfigurationDTO {
                     search_tool_call_options: page_parameters_self
                         .search_tool_call_options
                         .or(page_parameters_curr.search_tool_call_options),
+                    not_filter_tool_call_options: page_parameters_self
+                        .not_filter_tool_call_options
+                        .or(page_parameters_curr.not_filter_tool_call_options),
                     suggested_queries: page_parameters_self
                         .suggested_queries
                         .or(page_parameters_curr.suggested_queries),
@@ -3646,6 +3715,10 @@ impl DatasetConfigurationDTO {
                 .AIMON_RERANKER_TASK_DEFINITION
                 .clone()
                 .unwrap_or(curr_dataset_config.AIMON_RERANKER_TASK_DEFINITION),
+            TOOL_CONFIGURATION: self
+                .TOOL_CONFIGURATION
+                .clone()
+                .unwrap_or(curr_dataset_config.TOOL_CONFIGURATION),
         }
     }
 }
@@ -3664,7 +3737,6 @@ impl DatasetConfigurationDTO {
     "DOCUMENT_UPLOAD_FEATURE": true,
     "FILE_NAME_KEY": "file_name_key",
 }))]
-
 pub struct DatasetAndOrgWithSubAndPlan {
     pub dataset: Dataset,
     pub organization: OrganizationWithSubAndPlan,
@@ -4538,13 +4610,14 @@ impl ApiKeyRequestParams {
             currency: payload.currency,
             context_options: payload.context_options,
             no_result_message: self.no_result_message.or(payload.no_result_message),
-            only_include_docs_used: payload.only_include_docs_used,
             use_quote_negated_terms: self
                 .use_quote_negated_terms
                 .or(payload.use_quote_negated_terms),
             remove_stop_words: self.remove_stop_words.or(payload.remove_stop_words),
             typo_options: self.typo_options.or(payload.typo_options),
             metadata: payload.metadata,
+            use_agentic_search: payload.use_agentic_search,
+            only_include_docs_used: payload.only_include_docs_used,
         }
     }
 
@@ -5146,7 +5219,7 @@ pub enum RangeCondition {
     Int(i64),
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema, Default)]
 #[schema(example = json!({
     "gte": 0.0,
     "lte": 1.0,
@@ -5256,7 +5329,7 @@ pub struct HasChunkIDCondition {
     pub tracking_ids: Option<Vec<String>>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, ToSchema)]
+#[derive(Serialize, Deserialize, Debug, Clone, ToSchema, Default)]
 #[schema(example = json!({
     "field": "metadata.key1",
     "match": ["value1", "value2"],
@@ -8260,7 +8333,7 @@ pub enum SearchAnalyticsResponse {
     #[schema(title = "CountQueries")]
     CountQueries(QueryCountResponse),
     #[schema(title = "QueryDetails")]
-    QueryDetails(SearchQueryEvent),
+    QueryDetails(Box<SearchQueryEvent>),
     #[schema(title = "PopularFilters")]
     PopularFilters(PopularFiltersResponse),
     #[schema(title = "CTRMetricsOverTime")]
@@ -8294,7 +8367,7 @@ pub enum RecommendationAnalyticsResponse {
     #[schema(title = "RecommendationQueries")]
     RecommendationQueries(RecommendationsEventResponse),
     #[schema(title = "QueryDetails")]
-    QueryDetails(RecommendationEvent),
+    QueryDetails(Box<RecommendationEvent>),
     #[schema(title = "RecommendationUsageGraph")]
     RecommendationUsageGraph(RecommendationUsageGraphResponse),
     #[schema(title = "RecommendationsPerUser")]
@@ -9421,15 +9494,16 @@ impl<'de> Deserialize<'de> for CreateMessageReqPayload {
             pub use_group_search: Option<bool>,
             pub context_options: Option<ContextOptions>,
             pub no_result_message: Option<String>,
-            pub only_include_docs_used: Option<bool>,
             pub currency: Option<String>,
             metadata: Option<serde_json::Value>,
             pub rag_context: Option<String>,
+            pub use_agentic_search: Option<bool>,
             #[serde(flatten)]
             other: std::collections::HashMap<String, serde_json::Value>,
             use_quote_negated_terms: Option<bool>,
             remove_stop_words: Option<bool>,
             typo_options: Option<TypoOptions>,
+            pub only_include_docs_used: Option<bool>,
         }
 
         let mut helper = Helper::deserialize(deserializer)?;
@@ -9466,10 +9540,11 @@ impl<'de> Deserialize<'de> for CreateMessageReqPayload {
             no_result_message: helper.no_result_message,
             metadata: helper.metadata,
             rag_context: helper.rag_context,
-            only_include_docs_used: helper.only_include_docs_used,
             use_quote_negated_terms: helper.use_quote_negated_terms,
             remove_stop_words: helper.remove_stop_words,
             typo_options: helper.typo_options,
+            use_agentic_search: helper.use_agentic_search,
+            only_include_docs_used: helper.only_include_docs_used,
         })
     }
 }
@@ -9495,7 +9570,6 @@ impl<'de> Deserialize<'de> for RegenerateMessageReqPayload {
             pub use_group_search: Option<bool>,
             pub context_options: Option<ContextOptions>,
             pub no_result_message: Option<String>,
-            pub only_include_docs_used: Option<bool>,
             pub currency: Option<String>,
             metadata: Option<serde_json::Value>,
             #[serde(flatten)]
@@ -9504,6 +9578,8 @@ impl<'de> Deserialize<'de> for RegenerateMessageReqPayload {
             pub remove_stop_words: Option<bool>,
             pub typo_options: Option<TypoOptions>,
             pub rag_context: Option<String>,
+            pub use_agentic_search: Option<bool>,
+            pub only_include_docs_used: Option<bool>,
         }
 
         let mut helper = Helper::deserialize(deserializer)?;
@@ -9536,11 +9612,12 @@ impl<'de> Deserialize<'de> for RegenerateMessageReqPayload {
             context_options,
             metadata: helper.metadata,
             no_result_message: helper.no_result_message,
-            only_include_docs_used: helper.only_include_docs_used,
             use_quote_negated_terms: helper.use_quote_negated_terms,
             remove_stop_words: helper.remove_stop_words,
             typo_options: helper.typo_options,
             rag_context: helper.rag_context,
+            use_agentic_search: helper.use_agentic_search,
+            only_include_docs_used: helper.only_include_docs_used,
         })
     }
 }
@@ -9570,7 +9647,6 @@ impl<'de> Deserialize<'de> for EditMessageReqPayload {
             pub user_id: Option<String>,
             pub context_options: Option<ContextOptions>,
             pub no_result_message: Option<String>,
-            pub only_include_docs_used: Option<bool>,
             pub currency: Option<String>,
             metadata: Option<serde_json::Value>,
             #[serde(flatten)]
@@ -9579,6 +9655,8 @@ impl<'de> Deserialize<'de> for EditMessageReqPayload {
             pub remove_stop_words: Option<bool>,
             pub typo_options: Option<TypoOptions>,
             pub rag_context: Option<String>,
+            pub use_agentic_search: Option<bool>,
+            pub only_include_docs_used: Option<bool>,
         }
 
         let mut helper = Helper::deserialize(deserializer)?;
@@ -9615,11 +9693,12 @@ impl<'de> Deserialize<'de> for EditMessageReqPayload {
             context_options,
             metadata: helper.metadata,
             no_result_message: helper.no_result_message,
-            only_include_docs_used: helper.only_include_docs_used,
             use_quote_negated_terms: helper.use_quote_negated_terms,
             remove_stop_words: helper.remove_stop_words,
             typo_options: helper.typo_options,
             rag_context: helper.rag_context,
+            use_agentic_search: helper.use_agentic_search,
+            only_include_docs_used: helper.only_include_docs_used,
         })
     }
 }

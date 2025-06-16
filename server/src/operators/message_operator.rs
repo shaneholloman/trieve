@@ -449,8 +449,8 @@ pub async fn get_rag_chunks_query(
             messages: gen_inference_msgs,
             stream: Some(false),
             temperature: dataset_config.TEMPERATURE.map(|temp| temp as f32),
-            frequency_penalty: Some(dataset_config.FREQUENCY_PENALTY.unwrap_or(0.8) as f32),
-            presence_penalty: Some(dataset_config.PRESENCE_PENALTY.unwrap_or(0.8) as f32),
+            frequency_penalty: dataset_config.FREQUENCY_PENALTY.map(|pen| pen as f32),
+            presence_penalty: dataset_config.PRESENCE_PENALTY.map(|pen| pen as f32),
             stop: dataset_config.STOP_TOKENS.clone().map(StopToken::Array),
             top_p: None,
             n: None,
@@ -854,7 +854,10 @@ pub async fn stream_response(
     };
 
     let rag_prompt = dataset_config.RAG_PROMPT.clone();
-    let chosen_model = dataset_config.LLM_DEFAULT_MODEL.clone();
+    let chosen_model = create_message_req_payload
+        .model
+        .clone()
+        .unwrap_or(dataset_config.LLM_DEFAULT_MODEL.clone());
 
     let (search_event, score_chunks) = get_rag_chunks_query(
         create_message_req_payload.clone(),
@@ -1791,7 +1794,6 @@ async fn handle_search_tool_call(
                 "id": chunk_metadata.id,
                 "content": convert_html_to_text(&chunk_metadata.chunk_html.unwrap_or_default()),
                 "tag_set": chunk_metadata.tag_set.clone(),
-                "metadata": chunk_metadata.metadata.clone(),
                 "num_value": chunk_metadata.num_value,
                 "score": score_chunk.score,
                 "link": chunk_metadata.link.unwrap_or_default()
@@ -1801,7 +1803,7 @@ async fn handle_search_tool_call(
 
     Ok((
         results,
-        serde_json::to_string(&formatted_results).unwrap_or_default(),
+        serde_json::to_string_pretty(&formatted_results).unwrap_or_default(),
         clickhouse_search_event,
     ))
 }
@@ -1894,8 +1896,10 @@ pub async fn stream_response_with_agentic_search(
         messages_len
     };
 
-    let chosen_model = dataset_config.LLM_DEFAULT_MODEL.clone();
-
+    let chosen_model = create_message_req_payload
+        .model
+        .clone()
+        .unwrap_or(dataset_config.LLM_DEFAULT_MODEL.clone());
     let tools = vec![ChatCompletionTool {
         r#type: ChatCompletionToolType::Function,
         function: ChatCompletionFunction {
@@ -2743,8 +2747,8 @@ pub async fn get_topic_string(
         top_p: None,
         n: None,
         stop: None,
-        frequency_penalty: Some(dataset_config.FREQUENCY_PENALTY.unwrap_or(0.8) as f32),
-        presence_penalty: Some(dataset_config.PRESENCE_PENALTY.unwrap_or(0.8) as f32),
+        frequency_penalty: None,
+        presence_penalty: None,
         logit_bias: None,
         user: None,
         response_format: None,
@@ -3003,8 +3007,8 @@ pub async fn suggested_followp_questions(
         n: None,
         stop: None,
         max_completion_tokens: None,
-        frequency_penalty: Some(dataset_config.FREQUENCY_PENALTY.unwrap_or(0.8) as f32),
-        presence_penalty: Some(dataset_config.PRESENCE_PENALTY.unwrap_or(0.8) as f32),
+        frequency_penalty: None,
+        presence_penalty: None,
         logit_bias: None,
         user: None,
         response_format: None,
@@ -3244,8 +3248,8 @@ pub async fn suggested_new_queries(
         n: None,
         stop: None,
         max_completion_tokens: None,
-        frequency_penalty: Some(dataset_config.clone().FREQUENCY_PENALTY.unwrap_or(0.8) as f32),
-        presence_penalty: Some(dataset_config.clone().PRESENCE_PENALTY.unwrap_or(0.8) as f32),
+        frequency_penalty: None,
+        presence_penalty: None,
         logit_bias: None,
         user: None,
         response_format: None,

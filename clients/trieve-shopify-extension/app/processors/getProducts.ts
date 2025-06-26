@@ -335,7 +335,12 @@ export async function sendChunksFromWebhook(
     );
   });
 
-  let dataChunksResolved = await Promise.all(dataChunks);
+  let dataChunksResolved: ChunkReqPayload[] = [];
+  try {
+    dataChunksResolved = await Promise.all(dataChunks);
+  } catch (e) {
+    console.error(`Error getting chunks to send to Trieve: ${e}`);
+  }
 
   for (const batch of chunk_to_size(dataChunksResolved, 120)) {
     sendChunksToTrieve(batch, key, datasetId ?? "");

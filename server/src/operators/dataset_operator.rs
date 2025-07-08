@@ -29,6 +29,7 @@ use time::{format_description, OffsetDateTime};
 
 use super::clickhouse_operator::EventQueue;
 
+#[tracing::instrument(skip_all)]
 pub async fn create_dataset_query(
     new_dataset: Dataset,
     pool: web::Data<Pool>,
@@ -57,6 +58,7 @@ pub async fn create_dataset_query(
     Ok(new_dataset)
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn create_datasets_query(
     datasets: Vec<Dataset>,
     upsert: Option<bool>,
@@ -85,7 +87,7 @@ pub async fn create_datasets_query(
             .get_results::<Dataset>(&mut conn)
             .await
             .map_err(|err| {
-                log::error!("Could not create dataset batch: {}", err);
+                log::error!("Could not create dataset batch: {err}");
                 ServiceError::BadRequest(
                     "Could not create dataset batch due to pg error".to_string(),
                 )
@@ -97,7 +99,7 @@ pub async fn create_datasets_query(
             .get_results::<Dataset>(&mut conn)
             .await
             .map_err(|err| {
-                log::error!("Could not create dataset batch: {}", err);
+                log::error!("Could not create dataset batch: {err}");
                 ServiceError::BadRequest(
                     "Could not create dataset batch due to pg error".to_string(),
                 )
@@ -107,6 +109,7 @@ pub async fn create_datasets_query(
     Ok(created_or_upserted_datasets)
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn get_dataset_by_id_query(
     id: uuid::Uuid,
     pool: web::Data<Pool>,
@@ -128,6 +131,7 @@ pub async fn get_dataset_by_id_query(
     Ok(dataset)
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn get_dataset_by_tracking_id_query(
     tracking_id: String,
     org_id: uuid::Uuid,
@@ -151,6 +155,7 @@ pub async fn get_dataset_by_tracking_id_query(
     Ok(dataset)
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn get_dataset_by_tracking_id_unsafe_query(
     tracking_id: String,
     pool: web::Data<Pool>,
@@ -172,6 +177,7 @@ pub async fn get_dataset_by_tracking_id_unsafe_query(
     Ok(dataset)
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn get_deleted_dataset_by_id_query(
     id: uuid::Uuid,
     pool: web::Data<Pool>,
@@ -192,6 +198,7 @@ pub async fn get_deleted_dataset_by_id_query(
     Ok(dataset)
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn get_deleted_dataset_by_tracking_id_query(
     tracking_id: String,
     org_id: uuid::Uuid,
@@ -214,6 +221,7 @@ pub async fn get_deleted_dataset_by_tracking_id_query(
     Ok(dataset)
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn get_all_dataset_ids(pool: web::Data<Pool>) -> Result<Vec<uuid::Uuid>, ServiceError> {
     use crate::data::schema::datasets::dsl as datasets_columns;
     let mut conn = pool
@@ -231,6 +239,7 @@ pub async fn get_all_dataset_ids(pool: web::Data<Pool>) -> Result<Vec<uuid::Uuid
     Ok(datasets)
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn get_dataset_and_organization_from_dataset_id_query(
     id: UnifiedId,
     org_id: Option<uuid::Uuid>,
@@ -400,6 +409,7 @@ impl DeleteMessage {
     }
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn soft_delete_dataset_by_id_query(
     id: uuid::Uuid,
     dataset_config: DatasetConfiguration,
@@ -418,13 +428,12 @@ pub async fn soft_delete_dataset_by_id_query(
     }
 
     diesel::sql_query(format!(
-        "UPDATE datasets SET deleted = 1, tracking_id = NULL WHERE id = '{}'::uuid",
-        id
+        "UPDATE datasets SET deleted = 1, tracking_id = NULL WHERE id = '{id}'::uuid",
     ))
     .execute(&mut conn)
     .await
     .map_err(|err| {
-        log::error!("Could not delete dataset: {}", err);
+        log::error!("Could not delete dataset: {err}");
         ServiceError::BadRequest("Could not delete dataset".to_string())
     })?;
 
@@ -453,6 +462,7 @@ pub async fn soft_delete_dataset_by_id_query(
     Ok(())
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn clear_dataset_by_dataset_id_query(
     id: uuid::Uuid,
     dataset_config: DatasetConfiguration,
@@ -488,6 +498,7 @@ pub async fn clear_dataset_by_dataset_id_query(
     Ok(())
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn clear_dataset_query(
     id: uuid::Uuid,
     deleted_at: chrono::NaiveDateTime,
@@ -512,40 +523,60 @@ pub async fn clear_dataset_query(
 
     let qdrant_collection = get_qdrant_collection_from_dataset_config(&dataset_config);
 
-    let chunk_groups = chunk_group::chunk_group
-        .filter(chunk_group::dataset_id.eq(id))
-        .filter(chunk_group::created_at.le(deleted_at))
-        .select(chunk_group::id)
-        .load::<uuid::Uuid>(&mut conn)
+    // Delete chunk groups and bookmarks in batches using offset
+    let mut last_group_offset_id = uuid::Uuid::nil();
+    loop {
+        let chunk_group_ids: Vec<uuid::Uuid> = chunk_group::chunk_group
+            .filter(chunk_group::dataset_id.eq(id))
+            .filter(chunk_group::created_at.le(deleted_at))
+            .filter(chunk_group::id.gt(last_group_offset_id))
+            .select(chunk_group::id)
+            .order(chunk_group::id)
+            .limit(
+                option_env!("DELETE_CHUNK_BATCH_SIZE")
+                    .unwrap_or("5000")
+                    .parse::<i64>()
+                    .unwrap_or(5000),
+            )
+            .load::<uuid::Uuid>(&mut conn)
+            .await
+            .map_err(|err| {
+                log::error!("Could not fetch chunk group ids: {err}");
+                ServiceError::BadRequest("Could not fetch chunk group ids".to_string())
+            })?;
+
+        if chunk_group_ids.is_empty() {
+            break;
+        }
+
+        diesel::delete(
+            chunk_group_bookmarks_columns::chunk_group_bookmarks
+                .filter(chunk_group_bookmarks_columns::group_id.eq_any(&chunk_group_ids))
+                .filter(chunk_group_bookmarks_columns::created_at.le(deleted_at)),
+        )
+        .execute(&mut conn)
         .await
         .map_err(|err| {
-            log::error!("Could not fetch groups: {}", err);
-            ServiceError::BadRequest("Could not fetch groups".to_string())
+            log::error!("Could not delete chunk_group_bookmarks: {err}");
+            ServiceError::BadRequest("Could not delete chunk_group_bookmarks".to_string())
         })?;
 
-    diesel::delete(
-        chunk_group_bookmarks_columns::chunk_group_bookmarks
-            .filter(chunk_group_bookmarks_columns::group_id.eq_any(chunk_groups))
-            .filter(chunk_group_bookmarks_columns::created_at.le(deleted_at)),
-    )
-    .execute(&mut conn)
-    .await
-    .map_err(|err| {
-        log::error!("Could not delete chunk_group_bookmarks: {}", err);
-        ServiceError::BadRequest("Could not delete chunk_group_bookmarks".to_string())
-    })?;
+        diesel::delete(chunk_group::chunk_group.filter(chunk_group::id.eq_any(&chunk_group_ids)))
+            .execute(&mut conn)
+            .await
+            .map_err(|err| {
+                log::error!("Could not delete chunk groups: {err}");
+                ServiceError::BadRequest("Could not delete chunk groups".to_string())
+            })?;
 
-    diesel::delete(
-        chunk_group::chunk_group
-            .filter(chunk_group::dataset_id.eq(id))
-            .filter(chunk_group::created_at.le(deleted_at)),
-    )
-    .execute(&mut conn)
-    .await
-    .map_err(|err| {
-        log::error!("Could not delete groups: {}", err);
-        ServiceError::BadRequest("Could not delete groups".to_string())
-    })?;
+        log::info!(
+            "Deleted {} chunk groups for dataset {}",
+            chunk_group_ids.len(),
+            id
+        );
+
+        last_group_offset_id = *chunk_group_ids.last().unwrap();
+    }
 
     diesel::delete(
         files_column::files
@@ -555,7 +586,7 @@ pub async fn clear_dataset_query(
     .execute(&mut conn)
     .await
     .map_err(|err| {
-        log::error!("Could not delete files: {}", err);
+        log::error!("Could not delete files: {err}");
         ServiceError::BadRequest("Could not delete files".to_string())
     })?;
 
@@ -581,7 +612,7 @@ pub async fn clear_dataset_query(
                 .load::<(uuid::Uuid, uuid::Uuid)>(&mut conn)
                 .await
                 .map_err(|err| {
-                    log::error!("Could not fetch chunk IDs: {}", err);
+                    log::error!("Could not fetch chunk IDs: {err}");
                     ServiceError::BadRequest("Could not fetch chunk IDs to delete".to_string())
                 })?;
 
@@ -595,7 +626,7 @@ pub async fn clear_dataset_query(
             .collect::<Vec<uuid::Uuid>>();
 
         if chunk_ids.is_empty() {
-            log::info!("No more chunks to delete for dataset {}", id);
+            log::info!("No more chunks to delete for dataset {id}");
             break;
         }
 
@@ -606,20 +637,16 @@ pub async fn clear_dataset_query(
         .execute(&mut conn)
         .await
         .map_err(|err| {
-            log::error!("Could not delete chunks in current batch: {}", err);
+            log::error!("Could not delete chunks in current batch: {err}");
             ServiceError::BadRequest("Could not delete chunks in current batch".to_string())
         })?;
 
         delete_points_from_qdrant(qdrant_point_ids, qdrant_collection.clone())
             .await
             .map_err(|err| {
-                log::error!(
-                    "Could not delete points in current batch from qdrant: {}",
-                    err
-                );
+                log::error!("Could not delete points in current batch from qdrant: {err}");
                 ServiceError::BadRequest(format!(
-                    "Could not delete points in current batch from qdrant: {}",
-                    err
+                    "Could not delete points in current batch from qdrant: {err}"
                 ))
             })?;
 
@@ -647,6 +674,7 @@ pub async fn clear_dataset_query(
     Ok(())
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn delete_dataset_by_id_query(
     id: uuid::Uuid,
     deleted_at: chrono::NaiveDateTime,
@@ -664,11 +692,11 @@ pub async fn delete_dataset_by_id_query(
         bulk_delete_chunks_query(None, deleted_at, id, dataset_config.clone(), pool.clone())
             .await
             .map_err(|err| {
-                log::error!("Failed to bulk delete chunks: {:?}", err);
+                log::error!("Failed to bulk delete chunks: {err:?}");
                 err
             })?;
 
-        log::info!("Bulk deleted chunks for dataset: {:?}", id);
+        log::info!("Bulk deleted chunks for dataset: {id:?}");
     } else {
         clear_dataset_query(
             id,
@@ -685,13 +713,14 @@ pub async fn delete_dataset_by_id_query(
             .get_result(&mut conn)
             .await
             .map_err(|err| {
-                log::error!("Could not delete dataset: {}", err);
+                log::error!("Could not delete dataset: {err}");
                 ServiceError::BadRequest("Could not delete dataset".to_string())
             })?;
 
     Ok(dataset)
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn update_dataset_query(
     id: uuid::Uuid,
     name: String,
@@ -744,6 +773,7 @@ pub async fn update_dataset_query(
     Ok(new_dataset)
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn get_datasets_by_organization_id(
     org_id: uuid::Uuid,
     pagination: GetDatasetsPagination,
@@ -786,6 +816,7 @@ pub async fn get_datasets_by_organization_id(
     Ok(dataset_and_usages)
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn get_dataset_usage_query(
     dataset_id: uuid::Uuid,
     pool: web::Data<Pool>,
@@ -806,6 +837,7 @@ pub async fn get_dataset_usage_query(
     Ok(dataset_usage)
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn get_tags_in_dataset_query(
     dataset_id: uuid::Uuid,
     page: i64,
@@ -832,20 +864,19 @@ pub async fn get_tags_in_dataset_query(
         .offset((page - 1) * page_size)
         .load(&mut conn)
         .await
-        .map_err(|err| {
-            ServiceError::BadRequest(format!("Failed to get items with tags {}", err))
-        })?;
+        .map_err(|err| ServiceError::BadRequest(format!("Failed to get items with tags {err}")))?;
 
     let total_count = dataset_tags_columns::dataset_tags
         .select(count(dataset_tags_columns::tag))
         .filter(dataset_tags_columns::dataset_id.eq(dataset_id))
         .first::<i64>(&mut conn)
         .await
-        .map_err(|err| ServiceError::BadRequest(format!("Failed to get count of tags {}", err)))?;
+        .map_err(|err| ServiceError::BadRequest(format!("Failed to get count of tags {err}")))?;
 
     Ok((items, total_count))
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn scroll_dataset_ids_query(
     offset: uuid::Uuid,
     limit: i64,
@@ -873,6 +904,7 @@ pub async fn scroll_dataset_ids_query(
     Ok(Some(datasets))
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn add_words_to_dataset(
     words: Vec<String>,
     counts: Vec<i32>,
@@ -887,20 +919,20 @@ pub async fn add_words_to_dataset(
         .collect_vec();
 
     let mut words_inserter = clickhouse_client.insert("words_datasets").map_err(|e| {
-        log::error!("Error inserting words_datasets: {:?}", e);
-        ServiceError::InternalServerError(format!("Error inserting words_datasets: {:?}", e))
+        log::error!("Error inserting words_datasets: {e:?}");
+        ServiceError::InternalServerError(format!("Error inserting words_datasets: {e:?}"))
     })?;
 
     for row in rows {
         words_inserter.write(&row).await.map_err(|e| {
-            log::error!("Error inserting words_datasets: {:?}", e);
-            ServiceError::InternalServerError(format!("Error inserting words_datasets: {:?}", e))
+            log::error!("Error inserting words_datasets: {e:?}");
+            ServiceError::InternalServerError(format!("Error inserting words_datasets: {e:?}"))
         })?;
     }
 
     words_inserter.end().await.map_err(|e| {
-        log::error!("Error inserting words_datasets: {:?}", e);
-        ServiceError::InternalServerError(format!("Error inserting words_datasets: {:?}", e))
+        log::error!("Error inserting words_datasets: {e:?}");
+        ServiceError::InternalServerError(format!("Error inserting words_datasets: {e:?}"))
     })?;
 
     Ok(())
@@ -914,6 +946,7 @@ pub struct WordDatasetCount {
     pub count: i32,
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn scroll_words_from_dataset(
     dataset_id: uuid::Uuid,
     offset: uuid::Uuid,
@@ -928,9 +961,8 @@ pub async fn scroll_words_from_dataset(
             word,
             count,
         FROM words_datasets
-        WHERE dataset_id = '{}' AND id > '{}' 
-        ",
-        dataset_id, offset,
+        WHERE dataset_id = '{dataset_id}' AND id > '{offset}' 
+        "
     );
 
     if let Some(last_processed) = last_processed {
@@ -943,24 +975,23 @@ pub async fn scroll_words_from_dataset(
                         .unwrap()
                 )
                 .map_err(|e| {
-                    log::error!("Error formatting last processed time: {:?}", e);
+                    log::error!("Error formatting last processed time: {e:?}");
                     ServiceError::InternalServerError(format!(
-                        "Error formatting last processed time: {:?}",
-                        e
+                        "Error formatting last processed time: {e:?}"
                     ))
                 })?
         );
     }
 
-    query = format!("{} ORDER BY id LIMIT {}", query, limit);
+    query = format!("{query} ORDER BY id LIMIT {limit}");
 
     let words = clickhouse_client
         .query(&query)
         .fetch_all::<WordDatasetCount>()
         .await
         .map_err(|e| {
-            log::error!("Error fetching words from dataset: {:?}", e);
-            ServiceError::InternalServerError(format!("Error fetching words from dataset: {:?}", e))
+            log::error!("Error fetching words from dataset: {e:?}");
+            ServiceError::InternalServerError(format!("Error fetching words from dataset: {e:?}"))
         })?;
 
     if words.is_empty() {
@@ -970,6 +1001,7 @@ pub async fn scroll_words_from_dataset(
     }
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn update_dataset_last_processed_query(
     dataset_id: uuid::Uuid,
     clickhouse_client: &clickhouse::Client,
@@ -977,9 +1009,8 @@ pub async fn update_dataset_last_processed_query(
     let query = format!(
         "
         INSERT INTO dataset_words_last_processed (dataset_id, last_processed)
-        VALUES ('{}', now())
-        ",
-        dataset_id
+        VALUES ('{dataset_id}', now())
+        "
     );
 
     clickhouse_client
@@ -987,16 +1018,14 @@ pub async fn update_dataset_last_processed_query(
         .execute()
         .await
         .map_err(|e| {
-            log::error!("Error updating last processed time: {:?}", e);
-            ServiceError::InternalServerError(format!(
-                "Error updating last processed time: {:?}",
-                e
-            ))
+            log::error!("Error updating last processed time: {e:?}");
+            ServiceError::InternalServerError(format!("Error updating last processed time: {e:?}"))
         })?;
 
     Ok(())
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn get_dataset_config_query(
     dataset_id: uuid::Uuid,
     pool: web::Data<Pool>,

@@ -1,7 +1,7 @@
 use crate::operators::chunk_operator::get_random_chunk_qdrant_point_id_query;
 use crate::operators::message_operator::models::DatasetAndOrgWithSubAndPlan;
 use itertools::Itertools;
-use openai_dive::v1::models::WhisperModel;
+use openai_dive::v1::models::TranscriptionModel::Whisper1;
 use simple_server_timing_header::Timer;
 use simsearch::SimSearch;
 use std::sync::atomic::{AtomicBool, AtomicU16, Ordering};
@@ -105,6 +105,7 @@ pub struct ChatCompletionDTO {
     pub completion_tokens: i32,
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn get_topic_messages_query(
     messages_topic_id: uuid::Uuid,
     given_dataset_id: uuid::Uuid,
@@ -130,6 +131,7 @@ pub async fn get_topic_messages_query(
     Ok(topic_messages)
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn get_message_by_id_query(
     message_id: uuid::Uuid,
     given_dataset_id: uuid::Uuid,
@@ -155,6 +157,7 @@ pub async fn get_message_by_id_query(
     Ok(message)
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn create_messages_query(
     new_messages: Vec<Message>,
     pool: &web::Data<Pool>,
@@ -234,6 +237,7 @@ documents: [1,2]
 After you have done these things now follow:
 "#;
 
+#[tracing::instrument(skip_all)]
 pub async fn create_generic_system_message(
     system_prompt: String,
     use_agentic_search: bool,
@@ -270,6 +274,7 @@ pub async fn create_generic_system_message(
     Ok(system_message)
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn create_topic_message_query(
     config: &DatasetConfiguration,
     previous_messages: Vec<Message>,
@@ -306,6 +311,7 @@ pub async fn create_topic_message_query(
     Ok(ret_messages)
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn get_message_by_sort_for_topic_query(
     message_topic_id: uuid::Uuid,
     given_dataset_id: uuid::Uuid,
@@ -332,6 +338,7 @@ pub async fn get_message_by_sort_for_topic_query(
         })
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn get_messages_for_topic_query(
     message_topic_id: uuid::Uuid,
     given_dataset_id: uuid::Uuid,
@@ -357,6 +364,7 @@ pub async fn get_messages_for_topic_query(
         })
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn delete_message_query(
     given_message_id: uuid::Uuid,
     given_topic_id: uuid::Uuid,
@@ -390,6 +398,7 @@ pub async fn delete_message_query(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(skip_all)]
 pub async fn get_rag_chunks_query(
     create_message_req_payload: CreateMessageReqPayload,
     dataset_config: DatasetConfiguration,
@@ -409,6 +418,8 @@ pub async fn get_rag_chunks_query(
         };
 
     let use_message_to_query_prompt = dataset_config.USE_MESSAGE_TO_QUERY_PROMPT;
+    let llm_api_version = dataset_config.LLM_API_VERSION.clone();
+
     if create_message_req_payload.search_query.is_none() && use_message_to_query_prompt {
         let message_to_query_prompt = dataset_config.MESSAGE_TO_QUERY_PROMPT.clone();
         let mut gen_inference_msgs = vec![ChatMessage::User {
@@ -463,6 +474,11 @@ pub async fn get_rag_chunks_query(
             logprobs: None,
             top_logprobs: None,
             seed: None,
+            query_params: llm_api_version.as_ref().map(|version| {
+                let mut map = std::collections::HashMap::new();
+                map.insert("api-version".to_string(), version.clone());
+                map
+            }),
             ..Default::default()
         };
 
@@ -796,6 +812,7 @@ pub fn clean_markdown(markdown_text: &str) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(skip_all)]
 pub async fn stream_response(
     messages: Vec<models::Message>,
     topic_id: uuid::Uuid,
@@ -833,7 +850,7 @@ pub async fn stream_response(
         .collect();
 
     let base_url = dataset_config.LLM_BASE_URL.clone();
-
+    let llm_api_version = dataset_config.LLM_API_VERSION.clone();
     let llm_api_key = get_llm_api_key(&dataset_config);
 
     let client = Client {
@@ -1042,6 +1059,11 @@ pub async fn stream_response(
     let mut parameters = ChatCompletionParameters {
         model: chosen_model,
         messages: open_ai_messages.clone(),
+        query_params: llm_api_version.as_ref().map(|version| {
+            let mut map = std::collections::HashMap::new();
+            map.insert("api-version".to_string(), version.clone());
+            map
+        }),
         ..Default::default()
     };
 
@@ -1809,6 +1831,7 @@ async fn handle_search_tool_call(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(skip_all)]
 pub async fn stream_response_with_agentic_search(
     messages: Vec<models::Message>,
     topic_id: uuid::Uuid,
@@ -1876,7 +1899,7 @@ pub async fn stream_response_with_agentic_search(
     }
 
     let base_url = dataset_config.LLM_BASE_URL.clone();
-
+    let llm_api_version = dataset_config.LLM_API_VERSION.clone();
     let llm_api_key = get_llm_api_key(&dataset_config);
 
     let client = Client {
@@ -1959,6 +1982,11 @@ pub async fn stream_response_with_agentic_search(
         model: chosen_model,
         messages: openai_messages.clone(),
         tools: Some(tools.clone()),
+        query_params: llm_api_version.as_ref().map(|version| {
+            let mut map = std::collections::HashMap::new();
+            map.insert("api-version".to_string(), version.clone());
+            map
+        }),
         ..Default::default()
     };
 
@@ -2726,6 +2754,7 @@ pub async fn stream_response_with_agentic_search(
     }
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn get_topic_string(
     model: String,
     first_message: String,
@@ -2739,6 +2768,8 @@ pub async fn get_topic_string(
         name: None,
     };
     let dataset_config = DatasetConfiguration::from_json(dataset.server_configuration.clone());
+    let llm_api_version = dataset_config.LLM_API_VERSION.clone();
+
     let parameters = ChatCompletionParameters {
         model,
         messages: vec![prompt_topic_message],
@@ -2757,6 +2788,11 @@ pub async fn get_topic_string(
         logprobs: None,
         top_logprobs: None,
         seed: None,
+        query_params: llm_api_version.as_ref().map(|version| {
+            let mut map = std::collections::HashMap::new();
+            map.insert("api-version".to_string(), version.clone());
+            map
+        }),
         ..Default::default()
     };
 
@@ -2780,6 +2816,7 @@ pub async fn get_topic_string(
     };
 
     let query = client.chat().create(parameters).await.map_err(|err| {
+        log::error!("No LLM completion for topic: {:?}", err);
         ServiceError::BadRequest(format!("No LLM Completion for topic {:?}", err))
     })?;
 
@@ -2809,6 +2846,7 @@ pub async fn get_topic_string(
     Ok(topic)
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn get_text_from_image(
     image_url: String,
     prompt: Option<String>,
@@ -2908,6 +2946,7 @@ pub async fn get_text_from_image(
     Ok(text)
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn get_text_from_audio(audio_base64: &str) -> Result<String, ServiceError> {
     let client = Client {
         headers: None,
@@ -2927,7 +2966,7 @@ pub async fn get_text_from_audio(audio_base64: &str) -> Result<String, ServiceEr
             filename: "audio.mp3".to_string(),
             bytes: audio_bytes.into(),
         }))
-        .model(WhisperModel::Whisper1.to_string())
+        .model(Whisper1.to_string())
         .response_format(AudioOutputFormat::Text)
         .language("en".to_string())
         .build()
@@ -2964,6 +3003,7 @@ pub fn get_llm_api_key(dataset_config: &DatasetConfiguration) -> String {
     }
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn suggested_followp_questions(
     payload: SuggestedQueriesReqPayload,
     dataset_config: DatasetConfiguration,
@@ -3078,6 +3118,7 @@ pub async fn suggested_followp_questions(
     Ok(queries)
 }
 
+#[tracing::instrument(skip_all)]
 pub async fn suggested_new_queries(
     payload: SuggestedQueriesReqPayload,
     dataset_org_plan_sub: DatasetAndOrgWithSubAndPlan,
@@ -3090,6 +3131,7 @@ pub async fn suggested_new_queries(
 
     let base_url = dataset_config.LLM_BASE_URL.clone();
     let default_model = dataset_config.LLM_DEFAULT_MODEL.clone();
+    let llm_api_version = dataset_config.LLM_API_VERSION.clone();
     let qdrant_only = dataset_config.QDRANT_ONLY;
 
     let base_url = if base_url.is_empty() {
@@ -3258,6 +3300,11 @@ pub async fn suggested_new_queries(
         logprobs: None,
         top_logprobs: None,
         seed: None,
+        query_params: llm_api_version.as_ref().map(|version| {
+            let mut map = std::collections::HashMap::new();
+            map.insert("api-version".to_string(), version.clone());
+            map
+        }),
         ..Default::default()
     };
 
